@@ -21,19 +21,14 @@ Type parse_literal_type(const char *lit, size_t n)
     return NULL;
 }
 
-Ast_Ident make_identifier(const char *name, Ast_Block *enclosing_block)
-{
-    return (Ast_Ident) {
-        .base = { .type = AST_IDENT },
-        .name = name,
-        .enclosing_block = enclosing_block,
-    };
-}
-
 bool types_are_equal(Type a, Type b)
 {
     if (a == b) return true;
     if (a->tag != b->tag) return false;
+
+    if (a->tag == TYPE_POINTER) {
+        return a->pointer.element_type == b->pointer.element_type;
+    }
 
     switch (a->tag) {
         // We check runtime_size here, which we know MUST be set for literal types.

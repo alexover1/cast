@@ -2,7 +2,7 @@
 #include "vendor/arena.h"
 #include "vendor/stb_ds.h"
 #include "ast.h"
-#include "pipe.h"
+#include "interp.h"
 
 Arena temporary_arena = {0};
 Arena *context_arena = &temporary_arena;
@@ -89,13 +89,22 @@ int main(void)
     printf("}\n");
 
     {
-        Pipe pipe = init_pipe();
-        pipe_add_scope(&pipe, file_scope);
-        pipe_forward(&pipe);
+        Interp interp = init_interp();
+        interp_add_scope(&interp, file_scope);
+        interp_run_main_loop(&interp);
     }
 
     arena_free(&temporary_arena);
     return 0;
+}
+
+Ast_Ident make_identifier(const char *name, Ast_Block *enclosing_block)
+{
+    return (Ast_Ident) {
+        .base = { .type = AST_IDENT },
+        .name = name,
+        .enclosing_block = enclosing_block,
+    };
 }
 
 #define CONTEXT_ALLOC_IMPLEMENTATION

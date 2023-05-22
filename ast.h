@@ -197,6 +197,6 @@ typedef struct {
     uint32_t flags;
 } Ast_Declaration;
 
-Ast_Declaration *find_declaration_or_null(const Ast_Block *block, const char *name);
+const Ast_Declaration *find_declaration_or_null(const Ast_Block *block, const char *name);
 
 const char *ast_to_string(const Ast *ast);

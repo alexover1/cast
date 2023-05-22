@@ -15,7 +15,9 @@ typedef enum {
     TYPE_VOID = 5,
     TYPE_PROCEDURE = 6,
     TYPE_STRUCT = 7,
-    TYPE_TYPE = 8,
+    TYPE_POINTER = 8,
+    TYPE_ARRAY = 9,
+    TYPE_TYPE = 10,
 } Type_Info_Tag;
 
 typedef struct {
@@ -40,7 +42,14 @@ typedef struct {
     size_t *offsets;
 } Type_Info_Struct;
 
-typedef void Type_Info_Comptime;
+typedef struct {
+    Type element_type;
+} Type_Info_Pointer;
+
+typedef struct {
+    Type element_type;
+    int64_t element_count; // -1 for slice
+} Type_Info_Array;
 
 struct Type_Info {
     Type_Info_Tag tag;
@@ -54,16 +63,15 @@ struct Type_Info {
         // Type_Info_Void _void;
         Type_Info_Procedure procedure;
         Type_Info_Struct structure;
-        // Type_Info_Comptime _comptime;
+        Type_Info_Pointer pointer;
+        Type_Info_Array array;
+        // Type_Info_Type _type;
     };
 };
 
 const char *type_to_string(Type type);
 Type parse_literal_type(const char *lit, size_t n);
 bool types_are_equal(Type a, Type b);
-
-#include "ast.h"
-Type infer_ast_type(const Ast *ast);
 
 // Thread-safe because we never write:
 extern const Type_Info type_info_int;

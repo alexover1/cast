@@ -1,32 +1,30 @@
 #include "context_alloc.h"
+#include "ast.h"
 #include "type_info.h"
 #include "vendor/stb_ds.h"
 
-typedef Ast_Declaration *Decl;
-typedef const Ast_Block *Scope;
-
-Decl find_declaration_or_null(Scope scope, const char *name)
+const Ast_Declaration *find_declaration_or_null(const Ast_Block *block, const char *name)
 {
-    while (scope) {
-        For (scope->statements) {
-            if (scope->statements[it]->type != AST_DECLARATION) continue;
+    while (block) {
+        For (block->statements) {
+            if (block->statements[it]->type != AST_DECLARATION) continue;
 
-            Decl decl = Down(scope->statements[it]);
+            const Ast_Declaration *decl = Down(block->statements[it]);
             if (strcmp(decl->ident.name, name) == 0) return decl;
         }
-        scope = scope->parent;
+        block = block->parent;
     }
 
     return NULL;
 }
 
-Type infer_ast_type(const Ast *ast)
+Type typecheck_ast(const Ast *ast)
 {
     if (ast == NULL) return NULL;
 
     switch (ast->type) {
         case AST_LITERAL: {
-            Ast_Literal *lit = Down(ast);
+            const Ast_Literal *lit = Down(ast);
             if (lit->kind == LITERAL_INT)         return &type_info_comptime_int;
             else if (lit->kind == LITERAL_FLOAT)  return &type_info_comptime_float;
             else if (lit->kind == LITERAL_STRING) return &type_info_comptime_string;
@@ -34,9 +32,9 @@ Type infer_ast_type(const Ast *ast)
         }
         
         case AST_BINARY_OPERATOR: {
-            Ast_Binary_Operator *bin = Down(ast);
-            Type left = infer_ast_type(bin->left);
-            Type right = infer_ast_type(bin->right);
+            const Ast_Binary_Operator *bin = Down(ast);
+            Type left = typecheck_ast(bin->left);
+            Type right = typecheck_ast(bin->right);
 
             assert(left && right);
 
@@ -78,8 +76,8 @@ Type infer_ast_type(const Ast *ast)
         }
         
         case AST_PROCEDURE_CALL: {
-            Ast_Procedure_Call *call = Down(ast);
-            Type procedure_type = infer_ast_type(call->procedure_expression);
+            const Ast_Procedure_Call *call = Down(ast);
+            Type procedure_type = typecheck_ast(call->procedure_expression);
 
             assert(procedure_type);
 
@@ -98,7 +96,7 @@ Type infer_ast_type(const Ast *ast)
             }
 
             For (call->arguments) {
-                Type arg = infer_ast_type(call->arguments[it]);
+                Type arg = typecheck_ast(call->arguments[it]);
                 Type par = proc.parameters[it];
                 assert(arg && par);
                 if (arg != par) {
@@ -114,13 +112,13 @@ Type infer_ast_type(const Ast *ast)
         }
 
         case AST_IDENT: {
-            Ast_Ident *ident = Down(ast);
+            const Ast_Ident *ident = Down(ast);
             assert(ident->name);
             assert(ident->enclosing_block);
-            Ast_Declaration *decl = find_declaration_or_null(ident->enclosing_block, ident->name);
+            const Ast_Declaration *decl = find_declaration_or_null(ident->enclosing_block, ident->name);
             assert(decl);
             assert(decl->expression);
-            return infer_ast_type((const Ast *)decl->expression);
+            return typecheck_ast((const Ast *)decl->expression);
         }
 
         case AST_DECLARATION:

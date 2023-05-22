@@ -66,11 +66,22 @@ const char *type_to_string(Type type)
             return sb.data;
         }
 
+        case TYPE_POINTER: return tprint("*%s", type_to_string(type->pointer.element_type));
+
+        case TYPE_ARRAY: {
+            if (type->array.element_count >= 0) {
+                return tprint("[%ld]%s",
+                    type->array.element_count,
+                    type_to_string(type->array.element_type));
+            }
+            return tprint("[]%s", type_to_string(type->array.element_type));
+        }
+
         default: return "**INVALID**";
     }
 }
 
-const char *operator_kind_to_string(int operator_type)
+const char *operator_type_to_string(int operator_type)
 {
     if (operator_type < 256) {
         return tprint("%c", (char)operator_type);
@@ -112,7 +123,7 @@ const char *ast_to_string(const Ast *ast)
             const Ast_Binary_Operator *bin = Down(ast);
             return tprint("(%s %s %s)",
                 ast_to_string(bin->left),
-                operator_kind_to_string(bin->operator_type),
+                operator_type_to_string(bin->operator_type),
                 ast_to_string(bin->right));
         }
         
