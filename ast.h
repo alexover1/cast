@@ -181,6 +181,8 @@ struct Ast_Struct {
 enum {
     DECLARATION_IS_COMPTIME = 0x1,
     DECLARATION_IS_PROCEDURE_HEADER = 0x2,
+    // TODO: would it be more useful just to have DECLARATION_IS_STRUCT_MEMBER and then we can
+    // just check if it doesn't have DECLARATION_IS_COMPTIME to determine if it's a field?
     DECLARATION_IS_STRUCT_FIELD = 0x4, // NOTE: this is not set for all struct members, only fields
 };
 
