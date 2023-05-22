@@ -12,58 +12,82 @@ int main(void)
     Ast_Block *file_scope = context_alloc(sizeof(Ast_Block));
     file_scope->base.type = AST_BLOCK;
     
-    Ast_Binary_Operator *bin = context_alloc(sizeof(Ast_Binary_Operator));
-    bin->base.type = AST_BINARY_OPERATOR;
-    bin->operator_type = '+';
+    // START :: (34 + 35);
+    Ast_Declaration *start_decl = context_alloc(sizeof(Ast_Declaration));
+    start_decl->base.type = AST_DECLARATION;
+    start_decl->ident = make_identifier("START", file_scope);
+    start_decl->flags |= DECLARATION_IS_COMPTIME;
     {
-        Ast_Literal *left = context_alloc(sizeof(Ast_Literal));
-        left->base.type = AST_LITERAL;
-        left->kind = LITERAL_INT;
-        left->int_value = 34;
+        Ast_Binary_Operator *bin = context_alloc(sizeof(Ast_Binary_Operator));
+        bin->base.type = AST_BINARY_OPERATOR;
+        bin->operator_type = '+';
+        {
+            Ast_Literal *left = context_alloc(sizeof(Ast_Literal));
+            left->base.type = AST_LITERAL;
+            left->kind = LITERAL_INT;
+            left->int_value = 30;
 
-        Ast_Literal *right = context_alloc(sizeof(Ast_Literal));
-        right->base.type = AST_LITERAL;
-        right->kind = LITERAL_INT;
-        right->int_value = 35;
+            Ast_Literal *right = context_alloc(sizeof(Ast_Literal));
+            right->base.type = AST_LITERAL;
+            right->kind = LITERAL_INT;
+            right->int_value = 35;
     
-        bin->left = Base(left);
-        bin->right = Base(right);
+            bin->left = Base(left);
+            bin->right = Base(right);
+        }
+        start_decl->expression = Base(bin);
     }
-
-    Ast_Declaration *member_decl = context_alloc(sizeof(Ast_Declaration));
-    member_decl->base.type = AST_DECLARATION;
-    member_decl->ident.base.type = AST_IDENT; // TODO: this is hard to remember to set.
-    member_decl->ident.name = "position";
-    // member_decl->ident.enclosing_block = file_scope;
-    member_decl->expression = Base(bin);
-    // member_decl->flags |= DECLARATION_IS_COMPTIME;
-
-    Ast_Declaration *decl = context_alloc(sizeof(Ast_Declaration));
-    decl->base.type = AST_DECLARATION;
-    decl->ident.base.type = AST_IDENT; // TODO: this is hard to remember to set.
-    decl->ident.name = "Entity";
-    decl->ident.enclosing_block = file_scope;
-    decl->flags |= DECLARATION_IS_COMPTIME;
+    arrput(file_scope->statements, Base(start_decl));
     
+    // Entity :: struct { position := (34 + 35); };
+    Ast_Declaration *entity_decl = context_alloc(sizeof(Ast_Declaration));
+    entity_decl->base.type = AST_DECLARATION;
+    entity_decl->ident = make_identifier("Entity", file_scope);
+    entity_decl->flags |= DECLARATION_IS_COMPTIME;
     {
         Ast_Struct *struct_desc = context_alloc(sizeof(Ast_Struct));
         struct_desc->base.type = AST_STRUCT;
         struct_desc->scope.base.type = AST_BLOCK;
+        struct_desc->scope.parent = file_scope;
 
-        // Add member to parent scope
-        arrput(struct_desc->scope.statements, Base(member_decl));
-        member_decl->ident.enclosing_block = &struct_desc->scope;
+        // position := START;
+        Ast_Declaration *member_decl = context_alloc(sizeof(Ast_Declaration));
+        member_decl->base.type = AST_DECLARATION;
+        member_decl->ident = make_identifier("position", &struct_desc->scope);
         member_decl->flags |= DECLARATION_IS_STRUCT_FIELD;
+        {
+            Ast_Ident *ident = context_alloc(sizeof(Ast_Ident));
+            *ident = make_identifier("START", &struct_desc->scope);
+            member_decl->expression = Base(ident);
+        }
+        arrput(struct_desc->scope.statements, Base(member_decl));
 
         Ast_Type_Definition *defn = context_alloc(sizeof(Ast_Type_Definition));
         defn->base.type = AST_TYPE_DEFINITION;
         defn->struct_desc = struct_desc;
 
-        decl->expression = Base(defn);
+        entity_decl->expression = Base(defn);
     }
+    arrput(file_scope->statements, Base(entity_decl));
 
-    arrput(file_scope->statements, Base(decl));
-    
+    // Copy :: Entity;
+    Ast_Declaration *copy_decl = context_alloc(sizeof(Ast_Declaration));
+    copy_decl->base.type = AST_DECLARATION;
+    copy_decl->ident = make_identifier("Copy", file_scope);
+    copy_decl->flags |= DECLARATION_IS_COMPTIME;
+    {
+        Ast_Ident *ident = context_alloc(sizeof(Ast_Ident));
+        *ident = make_identifier("Entity", file_scope);
+        copy_decl->expression = Base(ident);
+    }
+    arrput(file_scope->statements, Base(copy_decl));
+
+    printf("{\n");
+    For (file_scope->statements) {
+        printf("    %s;\n", ast_to_string(file_scope->statements[it]));
+    }
+    printf("}\n");
+
     {
         Pipe pipe = init_pipe();
         pipe_add_scope(&pipe, file_scope);

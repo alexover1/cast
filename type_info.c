@@ -21,6 +21,15 @@ Type parse_literal_type(const char *lit, size_t n)
     return NULL;
 }
 
+Ast_Ident make_identifier(const char *name, Ast_Block *enclosing_block)
+{
+    return (Ast_Ident) {
+        .base = { .type = AST_IDENT },
+        .name = name,
+        .enclosing_block = enclosing_block,
+    };
+}
+
 bool types_are_equal(Type a, Type b)
 {
     if (a == b) return true;

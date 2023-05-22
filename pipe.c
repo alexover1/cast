@@ -108,14 +108,14 @@ static void pipe_entry(Pipe *pipe, Object_Entry *entry)
 
         if (ast->type == AST_TYPE_DEFINITION) {
             Defn defn = Down(ast);
-            Type type = create_type(pipe, defn);
+            Type created_type = create_type(pipe, defn);
 
-            if (type) {
-                hmput(pipe->types, defn, type);
+            if (created_type) {
+                hmput(pipe->types, defn, created_type);
                 object->index_within_type_table = hmgeti(pipe->types, defn);
 
 #if defined(PIPE_DO_TRACING)
-                printf("@  %s\n", type_to_string(type));
+                printf("@  %s (%ld)\n", type_to_string(created_type), object->index_within_type_table);
 #endif
             }
         }

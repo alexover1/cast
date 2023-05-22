@@ -54,6 +54,8 @@ Type infer_ast_type(const Ast *ast)
                 // comptime_float to sized float
                 if (left == &type_info_comptime_float && right->tag == TYPE_FLOAT) return right;
 
+                // TODO: comptime_float + int
+
                 // We do not allow comptime_float to sized int.
                 // ex:    3.5 + (s64)149
 
@@ -116,6 +118,7 @@ Type infer_ast_type(const Ast *ast)
             assert(ident->name);
             assert(ident->enclosing_block);
             Ast_Declaration *decl = find_declaration_or_null(ident->enclosing_block, ident->name);
+            assert(decl);
             assert(decl->expression);
             return infer_ast_type((const Ast *)decl->expression);
         }

@@ -66,7 +66,7 @@ const char *type_to_string(Type type)
             return sb.data;
         }
 
-        default: return "(unknown type)";
+        default: return "**INVALID**";
     }
 }
 
@@ -214,7 +214,7 @@ const char *ast_to_string(const Ast *ast)
             return tprint("%s := %s", ast_to_string(xx &decl->ident), ast_to_string(xx decl->expression));
         }
 
-        default:  UNIMPLEMENTED;
+        default: return "**INVALID**";
     }
 
     #undef xx

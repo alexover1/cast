@@ -79,6 +79,8 @@ typedef struct {
     Ast_Block *enclosing_block;
 } Ast_Ident;
 
+Ast_Ident make_identifier(const char *name, Ast_Block *enclosing_block);
+
 enum {
     OPERATOR_DOUBLE_EQUALS = 256,
 };
