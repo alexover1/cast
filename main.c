@@ -1,54 +1,74 @@
-#include <assert.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <inttypes.h>
-#include <string.h>
-#include <stdbool.h>
-
-#include "type_info.c"
-// #include "error_reporting.c"
-#include "program_printing.c"
+#include "context_alloc.h"
+#include "vendor/arena.h"
+#include "vendor/stb_ds.h"
+#include "ast.h"
+#include "pipe.h"
 
 Arena temporary_arena = {0};
 Arena *context_arena = &temporary_arena;
 
-Type_Table type_table = {0};
-
-int main()
+int main(void)
 {
-    add_preloaded_types_to_table(&type_table);
-   
-    // First, create the identifier "print".
+    Ast_Block *file_scope = context_alloc(sizeof(Ast_Block));
+    file_scope->base.type = AST_BLOCK;
+    
+    Ast_Binary_Operator *bin = context_alloc(sizeof(Ast_Binary_Operator));
+    bin->base.type = AST_BINARY_OPERATOR;
+    bin->operator_type = '+';
+    {
+        Ast_Literal *left = context_alloc(sizeof(Ast_Literal));
+        left->base.type = AST_LITERAL;
+        left->kind = LITERAL_INT;
+        left->int_value = 34;
 
-    Ast_Node ident = {
-        .kind = AST_IDENTIFIER,
-        .identifier = {
-            // .declaration = &my_print,
-            .text = "print",
-        },
-    };
+        Ast_Literal *right = context_alloc(sizeof(Ast_Literal));
+        right->base.type = AST_LITERAL;
+        right->kind = LITERAL_INT;
+        right->int_value = 35;
+    
+        bin->left = Base(left);
+        bin->right = Base(right);
+    }
 
-    // Then setup the arguments and create the call.
+    Ast_Declaration *member_decl = context_alloc(sizeof(Ast_Declaration));
+    member_decl->base.type = AST_DECLARATION;
+    member_decl->ident.base.type = AST_IDENT; // TODO: this is hard to remember to set.
+    member_decl->ident.name = "position";
+    // member_decl->ident.enclosing_block = file_scope;
+    member_decl->expression = Base(bin);
+    // member_decl->flags |= DECLARATION_IS_COMPTIME;
 
-    Ast_Node hello_world = {
-        .kind = AST_STRING,
-        .string = "Hello, World",
-    };
+    Ast_Declaration *decl = context_alloc(sizeof(Ast_Declaration));
+    decl->base.type = AST_DECLARATION;
+    decl->ident.base.type = AST_IDENT; // TODO: this is hard to remember to set.
+    decl->ident.name = "Entity";
+    decl->ident.enclosing_block = file_scope;
+    decl->flags |= DECLARATION_IS_COMPTIME;
+    
+    {
+        Ast_Struct *struct_desc = context_alloc(sizeof(Ast_Struct));
+        struct_desc->base.type = AST_STRUCT;
+        struct_desc->scope.base.type = AST_BLOCK;
 
-    Ast_Node arguments[] = {hello_world};
-    size_t arguments_count = 1;
+        // Add member to parent scope
+        arrput(struct_desc->scope.statements, Base(member_decl));
+        member_decl->ident.enclosing_block = &struct_desc->scope;
+        member_decl->flags |= DECLARATION_IS_STRUCT_FIELD;
 
-    Ast_Node call = {
-        .kind = AST_PROCEDURE_CALL,
-        .procedure_call = {
-            .procedure = &ident,
-            .arguments = arguments,
-            .arguments_count = arguments_count,
-        },
-    };
+        Ast_Type_Definition *defn = context_alloc(sizeof(Ast_Type_Definition));
+        defn->base.type = AST_TYPE_DEFINITION;
+        defn->struct_desc = struct_desc;
 
-    infer_types(&hello_world);
-    printf("type_of(%s) is %s\n", ast_to_string(hello_world), type_to_string(hello_world.inferred_type));
+        decl->expression = Base(defn);
+    }
+
+    arrput(file_scope->statements, Base(decl));
+    
+    {
+        Pipe pipe = init_pipe();
+        pipe_add_scope(&pipe, file_scope);
+        pipe_forward(&pipe);
+    }
 
     arena_free(&temporary_arena);
     return 0;
@@ -66,3 +86,7 @@ int main()
 #include "vendor/arena.h"
 #define STB_SPRINTF_IMPLEMENTATION
 #include "vendor/stb_sprintf.h"
+
+// TODO: It's really easy to check for a procedure when parsing.
+//       Right after we parse a parentheses expression, just check
+//       if the next token is a "->" token. (or check for "{")
