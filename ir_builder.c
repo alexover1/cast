@@ -1,7 +1,5 @@
+#include "common.h"
 #include "ir_builder.h"
-#include "context_alloc.h"
-#include "string_builder.h"
-#include "vendor/stb_ds.h"
 
 static inline Ir_Index ir_builder_create_value(Ir_Builder *builder, Ir_Value init)
 {

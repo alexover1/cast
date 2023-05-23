@@ -8,8 +8,6 @@ typedef struct {
     Type value;
 } Type_Table_Entry;
 
-Type typecheck_ast(const Ast *ast); // Or NULL.
-
 typedef struct Object Object;
 
 typedef struct {
@@ -22,3 +20,5 @@ Interp init_interp(void);
 void interp_add_scope(Interp *interp, const Ast_Block *scope);
 Type interp_create_type(Interp *interp, const Ast_Type_Definition *defn);
 void interp_run_main_loop(Interp *interp);
+
+Type typecheck_ast(Interp *interp, const Ast *ast);

@@ -1,16 +1,17 @@
-#include "context_alloc.h"
+#include "common.h"
 #include "ast.h"
 #include "type_info.h"
-#include "vendor/stb_ds.h"
+#include "interp.h"
 
-const Ast_Declaration *find_declaration_or_null(const Ast_Block *block, const char *name)
+const Ast_Declaration *find_declaration_or_null(const Ast_Ident *ident)
 {
+    const Ast_Block *block = ident->enclosing_block;
     while (block) {
         For (block->statements) {
             if (block->statements[it]->type != AST_DECLARATION) continue;
 
             const Ast_Declaration *decl = Down(block->statements[it]);
-            if (strcmp(decl->ident.name, name) == 0) return decl;
+            if (strcmp(decl->ident.name, ident->name) == 0) return decl;
         }
         block = block->parent;
     }
@@ -18,7 +19,7 @@ const Ast_Declaration *find_declaration_or_null(const Ast_Block *block, const ch
     return NULL;
 }
 
-Type typecheck_ast(const Ast *ast)
+Type typecheck_ast(Interp *interp, const Ast *ast)
 {
     if (ast == NULL) return NULL;
 
@@ -33,8 +34,8 @@ Type typecheck_ast(const Ast *ast)
         
         case AST_BINARY_OPERATOR: {
             const Ast_Binary_Operator *bin = Down(ast);
-            Type left = typecheck_ast(bin->left);
-            Type right = typecheck_ast(bin->right);
+            Type left = typecheck_ast(interp, bin->left);
+            Type right = typecheck_ast(interp, bin->right);
 
             assert(left && right);
 
@@ -77,7 +78,7 @@ Type typecheck_ast(const Ast *ast)
         
         case AST_PROCEDURE_CALL: {
             const Ast_Procedure_Call *call = Down(ast);
-            Type procedure_type = typecheck_ast(call->procedure_expression);
+            Type procedure_type = typecheck_ast(interp, call->procedure_expression);
 
             assert(procedure_type);
 
@@ -96,7 +97,7 @@ Type typecheck_ast(const Ast *ast)
             }
 
             For (call->arguments) {
-                Type arg = typecheck_ast(call->arguments[it]);
+                Type arg = typecheck_ast(interp, call->arguments[it]);
                 Type par = proc.parameters[it];
                 assert(arg && par);
                 if (arg != par) {
@@ -115,10 +116,10 @@ Type typecheck_ast(const Ast *ast)
             const Ast_Ident *ident = Down(ast);
             assert(ident->name);
             assert(ident->enclosing_block);
-            const Ast_Declaration *decl = find_declaration_or_null(ident->enclosing_block, ident->name);
+            const Ast_Declaration *decl = find_declaration_or_null(ident);
             assert(decl);
             assert(decl->expression);
-            return typecheck_ast((const Ast *)decl->expression);
+            return typecheck_ast(interp, decl->expression);
         }
 
         case AST_DECLARATION:
@@ -126,6 +127,13 @@ Type typecheck_ast(const Ast *ast)
 
         case AST_TYPE_DEFINITION:
             return &type_info_type;
+
+        case AST_TYPE_INSTANTIATION: {
+            const Ast_Type_Instantiation *inst = Down(ast);
+            Type_Table_Entry *e = hmgetp_null(interp->type_table, inst->type_definition);
+            assert(e && "This should be set before we call this function\n");
+            return e->value;
+        }
         
         default: UNIMPLEMENTED;
     }

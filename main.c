@@ -1,4 +1,4 @@
-#include "context_alloc.h"
+#include "common.h"
 #include "vendor/arena.h"
 #include "vendor/stb_ds.h"
 #include "ast.h"
@@ -38,7 +38,49 @@ int main(void)
         start_decl->expression = Base(bin);
     }
     arrput(file_scope->statements, Base(start_decl));
-    
+
+    // Monster :: struct { e: Entity; strength: int; };
+    Ast_Declaration *monster_decl = context_alloc(sizeof(Ast_Declaration));
+    monster_decl->base.type = AST_DECLARATION;
+    monster_decl->ident = make_identifier("Monster", file_scope);
+    monster_decl->flags |= DECLARATION_IS_COMPTIME;
+    {
+        Ast_Struct *struct_desc = context_alloc(sizeof(Ast_Struct));
+        struct_desc->base.type = AST_STRUCT;
+        struct_desc->scope.base.type = AST_BLOCK;
+        struct_desc->scope.parent = file_scope;
+
+        // e: Entity;
+        // Which gets translated into:
+        // e := Entity{};
+        Ast_Declaration *member_decl = context_alloc(sizeof(Ast_Declaration));
+        member_decl->base.type = AST_DECLARATION;
+        member_decl->ident = make_identifier("e", &struct_desc->scope);
+        member_decl->flags |= DECLARATION_IS_STRUCT_FIELD;
+        {
+            Ast_Type_Definition *defn = context_alloc(sizeof(Ast_Type_Definition));
+            defn->base.type = AST_TYPE_DEFINITION;
+            defn->type_name = context_alloc(sizeof(Ast_Ident));
+            *defn->type_name = make_identifier("Entity", &struct_desc->scope);
+            
+            Ast_Type_Instantiation *inst = context_alloc(sizeof(Ast_Type_Instantiation));
+            inst->base.type = AST_TYPE_INSTANTIATION;
+            inst->type_definition = defn;
+            inst->argument_list = NULL;
+            inst->flags |= INSTANTIATION_IS_IMPLICIT;
+
+            member_decl->expression = Base(inst);
+        }
+        arrput(struct_desc->scope.statements, Base(member_decl));
+
+        Ast_Type_Definition *defn = context_alloc(sizeof(Ast_Type_Definition));
+        defn->base.type = AST_TYPE_DEFINITION;
+        defn->struct_desc = struct_desc;
+
+        monster_decl->expression = Base(defn);
+    }
+    arrput(file_scope->statements, Base(monster_decl));
+   
     // Entity :: struct { position := (34 + 35); };
     Ast_Declaration *entity_decl = context_alloc(sizeof(Ast_Declaration));
     entity_decl->base.type = AST_DECLARATION;
@@ -107,10 +149,10 @@ Ast_Ident make_identifier(const char *name, Ast_Block *enclosing_block)
     };
 }
 
-#define CONTEXT_ALLOC_IMPLEMENTATION
-#include "context_alloc.h"
 #define STRING_BUILDER_IMPLEMENTATION
 #include "string_builder.h"
+#define CONTEXT_ALLOC_IMPLEMENTATION
+#include "vendor/context_alloc.h"
 #define STB_DS_IMPLEMENTATION
 #include "vendor/stb_ds.h"
 #define SV_IMPLEMENTATION

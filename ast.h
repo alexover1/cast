@@ -139,6 +139,7 @@ struct Ast_Type_Definition {
     Ast_Struct *struct_desc;
     Ast_Enum *enum_defn;
     const char *literal_name;
+    Ast_Ident *type_name;
 
     // If an array
     Ast_Type_Definition *array_element_type;
@@ -152,11 +153,18 @@ struct Ast_Type_Definition {
     Ast_Type_Definition **lambda_argument_types;
 };
 
+enum {
+    INSTANTIATION_IS_IMPLICIT = 0x1, // e.x.  entity: Entity;
+    INSTANTIATION_NEEDS_INFERRED_TYPE = 0x2, // When the type is not specified (using '.{}')
+};
+
 typedef struct {
     Ast base;
 
     Ast_Type_Definition *type_definition;
     Ast **argument_list; // @malloced with stb_ds
+
+    uint32_t flags;
 } Ast_Type_Instantiation;
 
 struct Ast_Enum {
@@ -188,6 +196,25 @@ enum {
     DECLARATION_IS_STRUCT_FIELD = 0x4, // NOTE: this is not set for all struct members, only fields
 };
 
+// Considering the line,
+//     e: Entity;
+
+// We actually don't ever store the type definition
+// that the user provided on the declaration.
+// We actually just create a type instantiation
+// and set a flag that it was implicit, so that we
+// can still properly recreate the source code if
+// that is necessary, or if the user wants to detect this
+// situation for enforcing style in their project.
+
+// If the user provided both a type and a value,
+// we create an implicit cast expression which helps
+// us to report errors on statements like
+//     x: int = Vector3{1, 4, 9};
+// Because the above gets translated into
+//     cast(int) Vector3{1, 4, 9}
+// with a flag set on the cast to mark it as implicit.
+
 typedef struct {
     Ast base;
 
@@ -197,6 +224,6 @@ typedef struct {
     uint32_t flags;
 } Ast_Declaration;
 
-const Ast_Declaration *find_declaration_or_null(const Ast_Block *block, const char *name);
+const Ast_Declaration *find_declaration_or_null(const Ast_Ident *ident);
 
 const char *ast_to_string(const Ast *ast);

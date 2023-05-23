@@ -24,7 +24,8 @@ void sb_print(String_Builder *sb, const char *fmt, ...);
 #define STRING_BUILDER_C_
 
 #include <string.h> // memcpy and strlen
-#include "context_alloc.h"
+
+#include "vendor/context_alloc.h"
 
 static void sb_maybe_grow(String_Builder *sb, size_t new_items_count)
 {

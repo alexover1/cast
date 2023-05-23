@@ -1,7 +1,6 @@
 #include <stdio.h>
 
-#include "context_alloc.h"
-#include "string_builder.h"
+#include "common.h"
 #include "vendor/stb_ds.h"
 
 #include "ast.h"
@@ -160,6 +159,8 @@ const char *ast_to_string(const Ast *ast)
 
             if (defn->literal_name) return defn->literal_name;
 
+            if (defn->type_name) return ast_to_string(xx defn->type_name);
+
             if (defn->array_element_type) {
                 return tprint("[] %s", ast_to_string(xx defn->array_element_type));
             }
@@ -186,6 +187,12 @@ const char *ast_to_string(const Ast *ast)
 
             context_arena = saved;
             return sb.data;
+        }
+
+        case AST_TYPE_INSTANTIATION: {
+            const Ast_Type_Instantiation *inst= Down(ast);
+            // TODO: print values
+            return tprint("%s{}", ast_to_string(xx inst->type_definition));
         }
 
         case AST_BLOCK: {
