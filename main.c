@@ -45,10 +45,16 @@ int main(void)
     monster_decl->ident = make_identifier("Monster", file_scope);
     monster_decl->flags |= DECLARATION_IS_COMPTIME;
     {
+        Ast_Type_Definition *defn = context_alloc(sizeof(Ast_Type_Definition));
+        defn->base.type = AST_TYPE_DEFINITION;
+
         Ast_Struct *struct_desc = context_alloc(sizeof(Ast_Struct));
         struct_desc->base.type = AST_STRUCT;
         struct_desc->scope.base.type = AST_BLOCK;
         struct_desc->scope.parent = file_scope;
+
+        defn->struct_desc = struct_desc;
+        monster_decl->expression = Base(defn);
 
         // e: Entity;
         // Which gets translated into:
@@ -73,11 +79,24 @@ int main(void)
         }
         arrput(struct_desc->scope.statements, Base(member_decl));
 
-        Ast_Type_Definition *defn = context_alloc(sizeof(Ast_Type_Definition));
-        defn->base.type = AST_TYPE_DEFINITION;
-        defn->struct_desc = struct_desc;
+        Ast_Declaration *strength_decl = context_alloc(sizeof(Ast_Declaration));
+        strength_decl->base.type = AST_DECLARATION;
+        strength_decl->ident = make_identifier("strength", &struct_desc->scope);
+        strength_decl->flags |= DECLARATION_IS_STRUCT_FIELD;
+        {
+            Ast_Type_Definition *defn = context_alloc(sizeof(Ast_Type_Definition));
+            defn->base.type = AST_TYPE_DEFINITION;
+            defn->literal_name = "int";
+            
+            Ast_Type_Instantiation *inst = context_alloc(sizeof(Ast_Type_Instantiation));
+            inst->base.type = AST_TYPE_INSTANTIATION;
+            inst->type_definition = defn;
+            inst->argument_list = NULL;
+            inst->flags |= INSTANTIATION_IS_IMPLICIT;
 
-        monster_decl->expression = Base(defn);
+            strength_decl->expression = Base(inst);
+        }
+        arrput(struct_desc->scope.statements, Base(strength_decl));
     }
     arrput(file_scope->statements, Base(monster_decl));
    

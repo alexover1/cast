@@ -57,9 +57,9 @@ const char *type_to_string(Type type)
 
             sb_append_cstr(&sb, "{ ");
             for (size_t i = 0; i < type->structure.field_count; ++i) {
-                sb_print(&sb, "%s: %s;", type->structure.names[i], type_to_string(type->structure.types[i]));
+                sb_print(&sb, "%s: %s; ", type->structure.names[i], type_to_string(type->structure.types[i]));
             }
-            sb_append_cstr(&sb, " }");
+            sb_append_cstr(&sb, "}");
 
             context_arena = old;
             return sb.data;
