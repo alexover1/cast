@@ -1,4 +1,5 @@
 #include "common.h"
+#include "lexer.h"
 #include "ast.h"
 #include "type_info.h"
 #include "interp.h"
@@ -66,12 +67,15 @@ Type typecheck_ast(Interp *interp, const Ast *ast)
             // Now we know that we have the same type on either side.
 
             // For now, assume all operators work only on int and float.
+            // TODO: logical operators and pointer math
+
             if (left->tag != TYPE_INTEGER && left->tag != TYPE_FLOAT) {
                 fprintf(stderr, "error: Binary operator expects type int or float but got type %s\n", type_to_string(left));
                 exit(1);
             }
 
-            if (bin->operator_type == OPERATOR_DOUBLE_EQUALS) return &type_info_bool;
+            int c = bin->operator_type;
+            if (c == TOKEN_ISEQUAL || c == TOKEN_ISNOTEQUAL || c == TOKEN_LESSEQUALS || c == TOKEN_GREATEREQUALS) return &type_info_bool;
 
             return left;
         }

@@ -2,6 +2,7 @@
 #include "vendor/arena.h"
 #include "vendor/stb_ds.h"
 #include "ast.h"
+#include "lexer.h"
 #include "interp.h"
 
 Arena temporary_arena = {0};
@@ -9,6 +10,17 @@ Arena *context_arena = &temporary_arena;
 
 int main(void)
 {
+    Lexer lexer;
+    String_View input = SV_STATIC(";if x then print(x)\n");
+    lexer_init(&lexer, input);
+
+    Token token = lexer_next_token(&lexer);
+    while (token.type != TOKEN_END_OF_INPUT) {
+        token = lexer_next_token(&lexer);
+    }
+
+    return 0;
+    
     Ast_Block *file_scope = context_alloc(sizeof(Ast_Block));
     file_scope->base.type = AST_BLOCK;
     
