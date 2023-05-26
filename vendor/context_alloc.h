@@ -1,7 +1,10 @@
 #ifndef CONTEXT_ALLOC_H_
 #define CONTEXT_ALLOC_H_
 
+#include <stdio.h>
 #include <stdarg.h>
+
+// ALLOCATION
 
 #include "arena.h"
 
@@ -10,21 +13,22 @@ extern Arena *context_arena;
 void *context_alloc(size_t size);
 void *context_realloc(void *oldptr, size_t oldsz, size_t newsz);
 
-// Temporary allocation makes a lot of stuff much simpler.
+// TEMPORARY STRING ALLOCATION
 
 extern Arena temporary_arena;
 
 char *tprint(const char *fmt, ...);
 char *vtprint(const char *fmt, va_list args);
 
+// LOGGING
+
+typedef int (*fprintf_t) (FILE *stream, const char *format, ...);
+
+extern fprintf_t context_logger;
+
 #endif // CONTEXT_ALLOC_H_
 
-
-
 #ifdef CONTEXT_ALLOC_IMPLEMENTATION
-
-#ifndef CONTEXT_ALLOC_C_
-#define CONTEXT_ALLOC_C_
 
 void *context_alloc(size_t size)
 {
@@ -71,5 +75,4 @@ char *vtprint(const char *fmt, va_list args0)
     return buf;
 }
 
-#endif // CONTEXT_ALLOC_C_
 #endif // CONTEXT_ALLOC_IMPLEMENTATION

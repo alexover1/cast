@@ -69,7 +69,7 @@ typedef enum {
 
 typedef struct {
     int type;
-    int l0, l1, c0, c1;
+    int l0, c0, c1;
     
     union {
         uint64_t int_value;
@@ -84,12 +84,13 @@ enum {
     NUMBER_IS_BINARY_LITERAL = 0x1,
     NUMBER_IS_HEX_LITERAL = 0x2,
     // NUMBER_IS_OCTAL_LITERAL = 0x4,
-    NUMBER_HAS_FRACTIONAL_PART = 0x8,
+    NUMBER_HAS_FRACTIONAL_PART = 0x8, // TODO: Not sure about how we want int/float to work...
 };
 
 typedef struct {
-    String_View current_file_name;
-    String_View current_path_name;
+    String_View file_name;
+    String_View path_name;
+    String_View *lines; // @malloced with stb_ds
 
     String_View current_input;
     String_View current_line;
@@ -106,3 +107,23 @@ void lexer_init(Lexer *l, String_View contents);
 void lexer_next_line(Lexer *lexer);
 Token lexer_peek_token(Lexer *lexer);
 Token lexer_next_token(Lexer *lexer);
+
+typedef struct {
+    int l0, c0, c1;
+} Lexer_Position;
+
+#ifndef _WIN32
+#define Loc_Fmt SV_Fmt":%d:%d"
+#else
+#define Loc_Fmt SV_Fmt"%s:%d,%d"
+#endif
+
+Lexer_Position position_from_lexer(const Lexer *lexer);
+Lexer_Position position_from_token(Token token);
+
+void lexer_report_error(const Lexer *lexer, Lexer_Position pos, const char *fmt, ...);
+
+// File and path-related functions:
+
+String_View path_get_file_name(const char *begin);
+bool path_file_exist(const char *file_path);

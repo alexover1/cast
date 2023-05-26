@@ -1,6 +1,23 @@
 #include <ctype.h>
 #include <assert.h>
+#include <stdarg.h>
+
+#ifndef _WIN32
+#    ifdef __linux__
+#        define _DEFAULT_SOURCE
+#        define _POSIX_C_SOURCE 200112L
+#    endif
+#    include <sys/types.h>
+#    include <sys/stat.h>
+#    include <unistd.h>
+#else
+#    define  WIN32_LEAN_AND_MEAN
+#    include "windows.h"
+#endif // _WIN32
+
 #include "lexer.h"
+#include "vendor/context_alloc.h"
+#include "vendor/stb_ds.h"
 
 #define lexer_current_character_index(lexer) ((lexer)->current_line.data - (lexer)->current_line_start)
 #define lexer_current_line_is_empty(lexer) ((lexer)->current_line.count == 0 || (lexer)->current_line.data[0] == '#')
@@ -71,6 +88,77 @@ static Token_Type parse_keyword_or_ident_token_type(String_View s)
     return TOKEN_IDENT;
 }
 
+static bool is_path_sep(char x)
+{
+#ifdef _WIN32
+    return x == '/' || x == '\\';
+#else
+    return x == '/';
+#endif
+}
+
+static String_View dot_guard(String_View name)
+{
+    if (sv_eq(name, SV(".")) || sv_eq(name, SV(".."))) {
+        return SV("");
+    }
+
+    return name;
+}
+
+String_View path_get_file_name(const char *begin)
+{
+    if (begin == NULL) {
+        return SV_NULL;
+    }
+
+    // ./foooooo/hello.basm
+    // ^         ^    ^
+    // begin     sep  dot
+
+    const size_t n = strlen(begin);
+    const char *dot = begin + n - 1;
+
+    while (begin <= dot && *dot != '.' && !is_path_sep(*dot)) {
+        dot -= 1;
+    }
+
+    if (begin > dot) {
+        return dot_guard(sv_from_cstr(begin));
+    }
+
+    if (is_path_sep(*dot)) {
+        return dot_guard(sv_from_cstr(dot + 1));
+    }
+
+    const char *sep = dot;
+
+    while (begin <= sep && !is_path_sep(*sep)) {
+        sep -= 1;
+    }
+    sep += 1;
+
+    assert(sep <= dot);
+    return dot_guard((String_View) {
+        .count = (size_t) (dot - sep),
+        .data = sep,
+    });
+}
+
+bool path_file_exist(const char *file_path)
+{
+#ifndef _WIN32
+    struct stat statbuf = {0};
+    return stat(file_path, &statbuf) == 0 &&
+           S_ISREG(statbuf.st_mode);
+#else
+    // https://stackoverflow.com/a/6218957
+    DWORD dwAttrib = GetFileAttributes(file_path);
+    return (dwAttrib != INVALID_FILE_ATTRIBUTES &&
+            !(dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
+#endif
+}
+
 Token lexer_eat_token(Lexer *lexer)
 {
     lexer->current_line = sv_trim_left(lexer->current_line);
@@ -84,7 +172,6 @@ Token lexer_eat_token(Lexer *lexer)
     Token token;
     token.type = TOKEN_END_OF_INPUT;
     token.l0 = lexer->current_line_number;
-    token.l1 = lexer->current_line_number;
     token.c0 = lexer_current_character_index(lexer);
     token.c1 = token.c0 + 1;
 
@@ -197,6 +284,7 @@ void lexer_next_line(Lexer *lexer)
     lexer->current_line = sv_chop_by_delim(&lexer->current_input, '\n');
     lexer->current_line_start = lexer->current_line.data;
     lexer->current_line_number += 1;
+    arrput(lexer->lines, lexer->current_line);
 }
 
 Token lexer_peek_token(Lexer *lexer)
@@ -216,12 +304,74 @@ Token lexer_next_token(Lexer *lexer)
     return lexer_eat_token(lexer);
 }
 
+Lexer_Position position_from_lexer(const Lexer *lexer)
+{
+    Lexer_Position pos;
+    pos.l0 = lexer->current_line_number;
+    pos.c0 = lexer_current_character_index(lexer);
+    pos.c1 = pos.c0 + 1;
+    return pos;
+}
+
+Lexer_Position position_from_token(Token token)
+{
+    Lexer_Position pos;
+    pos.l0 = token.l0;
+    pos.c0 = token.c0;
+    pos.c1 = token.c1;
+    return pos;
+}
+
+#define RED   "\x1B[31m"
+#define GRN   "\x1B[32m"
+#define YEL   "\x1B[33m"
+#define BLU   "\x1B[34m"
+#define MAG   "\x1B[35m"
+#define CYN   "\x1B[36m"
+#define WHT   "\x1B[37m"
+#define RESET "\x1B[0m"
+#define TAB   "    "
+
+void lexer_report_error(const Lexer *lexer, Lexer_Position pos, const char *fmt, ...)
+{
+    if (pos.l0 == 0) {
+        pos = position_from_lexer(lexer);
+    }
+    va_list args;
+    va_start(args, fmt);
+    const char *msg = vtprint(fmt, args);
+    assert(msg);
+
+    // Display the error message.
+    fprintf(stderr, Loc_Fmt": Error: %s\n", SV_Arg(lexer->path_name), pos.l0, pos.c0, msg);
+
+    fputc('\n', stderr);
+
+    // Display the previous line if it exists.
+    if (pos.l0 >= 2) {
+        fprintf(stderr, TAB CYN "\t"SV_Fmt"\n" RESET, SV_Arg(lexer->lines[pos.l0-1]));
+    }
+
+    // Highlight the token in red.
+    int n = pos.c1 - pos.c0;
+    String_View line = lexer->lines[pos.l0-1];
+    fprintf(stderr, TAB CYN "%.*s" RED "%.*s" CYN "%.*s\n" RESET,
+        pos.c0, line.data,                  // before
+        n, line.data + pos.c0,              // token
+        (int)line.count - n, line.data + pos.c1  // after
+    );
+    
+    exit(1);
+    va_end(args);
+}
+
 void lexer_init(Lexer *l, String_View input)
 {
     assert(input.data != NULL);
     
-    l->current_file_name = SV_NULL;
-    l->current_path_name = SV_NULL;
+    l->file_name = SV_NULL;
+    l->path_name = SV_NULL;
+    l->lines = NULL;
 
     l->current_input = input;
     l->current_line = SV_NULL;

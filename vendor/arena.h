@@ -63,9 +63,21 @@ void free_region(Region *r);
 // setting count-s of all the Region-s after the remembered a->end to 0.
 void *arena_alloc(Arena *a, size_t size_bytes);
 void *arena_realloc(Arena *a, void *oldptr, size_t oldsz, size_t newsz);
-
 void arena_reset(Arena *a);
 void arena_free(Arena *a);
+void arena_summary(Arena *a);
+
+#ifndef ARENA_NO_STRING_VIEW
+
+#include "sv.h"
+
+int arena_slurp_file(Arena *arena, String_View file_path, String_View *content);
+String_View arena_sv_concat(Arena *arena, ...);
+const char *arena_cstr_concat(Arena *arena, ...);
+const char *arena_sv_to_cstr(Arena *arena, String_View sv);
+String_View arena_sv_copy(Arena *arena, String_View sv);
+
+#endif // ARENA_NO_STRING_VIEW
 
 #endif // ARENA_H_
 
@@ -169,5 +181,151 @@ void arena_free(Arena *a)
     a->begin = NULL;
     a->end = NULL;
 }
+
+void arena_summary(Arena *arena)
+{
+    if (arena->begin== NULL) {
+        printf("[empty]");
+    }
+
+    for (Region *iter = arena->begin;
+            iter != NULL;
+            iter = iter->next) {
+        printf("[%zu/%zu] -> ", iter->count, iter->capacity);
+    }
+
+    printf("\n");
+}
+
+#ifndef ARENA_NO_STRING_VIEW
+
+String_View arena_sv_concat(Arena *arena, ...)
+{
+    size_t len = 0;
+
+    va_list args;
+    va_start(args, arena);
+    String_View sv = va_arg(args, String_View);
+    while (sv.data != NULL) {
+        len += sv.count;
+        sv = va_arg(args, String_View);
+    }
+    va_end(args);
+
+    char *buffer = arena_alloc(arena, len);
+    len = 0;
+
+    va_start(args, arena);
+    sv = va_arg(args, String_View);
+    while (sv.data != NULL) {
+        memcpy(buffer + len, sv.data, sv.count);
+        len += sv.count;
+        sv = va_arg(args, String_View);
+    }
+    va_end(args);
+
+    return (String_View) {
+        .count = len,
+        .data = buffer
+    };
+}
+
+#if ARENA_BACKEND == ARENA_BACKEND_LIBC_MALLOC
+
+int arena_slurp_file(Arena *arena, String_View file_path, String_View *content)
+{
+    const char *file_path_cstr = arena_sv_to_cstr(arena, file_path);
+
+    FILE *f = fopen(file_path_cstr, "rb");
+    if (f == NULL) {
+        return -1;
+    }
+
+    if (fseek(f, 0, SEEK_END) < 0) {
+        return -1;
+    }
+
+    long m = ftell(f);
+    if (m < 0) {
+        return -1;
+    }
+
+    char *buffer = arena_alloc(arena, (size_t) m);
+    if (buffer == NULL) {
+        return -1;
+    }
+
+    if (fseek(f, 0, SEEK_SET) < 0) {
+        return -1;
+    }
+
+    size_t n = fread(buffer, 1, (size_t) m, f);
+    if (ferror(f)) {
+        return -1;
+    }
+
+    fclose(f);
+
+    if (content) {
+        content->count = n;
+        content->data = buffer;
+    }
+
+    return 0;
+}
+#else
+#  error "TODO: arena_slurp_file is not implemented for other platforms besides libc"
+#endif
+
+const char *arena_cstr_concat(Arena *arena, ...)
+{
+    size_t len = 0;
+
+    va_list args;
+    va_start(args, arena);
+    const char *cstr = va_arg(args, const char *);
+    while (cstr != NULL) {
+        len += strlen(cstr);
+        cstr = va_arg(args, const char *);
+    }
+    va_end(args);
+
+    char *buffer = arena_alloc(arena, len + 1);
+    len = 0;
+
+    va_start(args, arena);
+    cstr = va_arg(args, const char *);
+    while (cstr != NULL) {
+        size_t n = strlen(cstr);
+        memcpy(buffer + len, cstr, n);
+        len += n;
+        cstr = va_arg(args, const char *);
+    }
+    va_end(args);
+
+    buffer[len] = '\0';
+
+    return buffer;
+}
+
+const char *arena_sv_to_cstr(Arena *arena, String_View sv)
+{
+    char *cstr = arena_alloc(arena, sv.count + 1);
+    memcpy(cstr, sv.data, sv.count);
+    cstr[sv.count] = '\0';
+    return cstr;
+}
+
+String_View arena_sv_copy(Arena *arena, String_View sv)
+{
+    char *buffer = arena_alloc(arena, sv.count);
+    memcpy(buffer, sv.data, sv.count);
+    return (String_View) {
+        .count = sv.count,
+        .data = buffer,
+    };
+}
+
+#endif // ARENA_NO_STRING_VIEW
 
 #endif // ARENA_IMPLEMENTATION

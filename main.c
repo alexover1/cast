@@ -1,22 +1,52 @@
+#include <errno.h>
+#include <string.h> // strerror
+#include <stdlib.h> // exit
+
 #include "common.h"
 #include "vendor/arena.h"
 #include "vendor/stb_ds.h"
 #include "ast.h"
 #include "lexer.h"
+#include "parser.h"
 #include "interp.h"
 
 Arena temporary_arena = {0};
 Arena *context_arena = &temporary_arena;
+fprintf_t context_logger = fprintf;
 
-int main(void)
-{
+int main(int argc, char **argv)
+{   
+    const char *program = shift_args(&argc, &argv);
+
+    if (!argc) {
+        fprintf(stderr, "Usage: %s [input_file]\n", program);
+        fprintf(stderr, "... expected at least one input file\n");
+        exit(1);
+    }
+
+    String_View input_file_path = sv_from_cstr(shift_args(&argc, &argv));
+
+    if (!path_file_exist(input_file_path.data)) {
+        fprintf(stderr, "File '%s' is not a regular file or does not exist\n", input_file_path.data);
+        exit(1);
+    }
+
+    String_View input;
+    int err = arena_slurp_file(context_arena, input_file_path, &input);
+    if (err != 0) {
+        fprintf(stderr, "System error while reading input file '%s': %s\n", input_file_path.data, strerror(errno));
+        exit(1);
+    }
+
     Lexer lexer;
-    String_View input = SV_STATIC(";if x then print(x)\n");
     lexer_init(&lexer, input);
+    lexer.path_name = input_file_path;
+    lexer.file_name = path_get_file_name(input_file_path.data);
 
     Token token = lexer_next_token(&lexer);
     while (token.type != TOKEN_END_OF_INPUT) {
         token = lexer_next_token(&lexer);
+        lexer_report_error(&lexer, position_from_token(token), "This is illegal.");
     }
 
     return 0;
@@ -178,6 +208,15 @@ Ast_Ident make_identifier(const char *name, Ast_Block *enclosing_block)
         .name = name,
         .enclosing_block = enclosing_block,
     };
+}
+
+char *shift_args(int *argc, char ***argv)
+{
+    assert(*argc > 0);
+    char *result = **argv;
+    *argv += 1;
+    *argc -= 1;
+    return result;
 }
 
 #define STRING_BUILDER_IMPLEMENTATION

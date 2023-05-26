@@ -42,3 +42,7 @@
 // BITWISE FLAGS
 
 #define flag_has(x, flag) (((x) & (flag)) != 0)
+
+// COMMAND-LINE ARGUMENTS
+
+char *shift_args(int *argc, char ***argv);
