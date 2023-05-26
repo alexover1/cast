@@ -1,10 +1,10 @@
 #include <stdio.h>
 
 #include "common.h"
-#include "vendor/stb_ds.h"
-
+#include "lexer.h"
 #include "ast.h"
 #include "type_info.h"
+#include "vendor/stb_ds.h"
 
 const char *type_to_string(Type type)
 {
@@ -80,21 +80,67 @@ const char *type_to_string(Type type)
     }
 }
 
-const char *operator_type_to_string(int operator_type)
+const char *token_type_to_string(int type)
 {
-    if (operator_type < 256) {
-        return tprint("%c", (char)operator_type);
+    if (type < 256) {
+        return tprint("%c", (char) type);
     }
 
-    UNIMPLEMENTED;
+    switch (type) {
+    case TOKEN_IDENT: return "identifier";
+    case TOKEN_NUMBER: return "number";
+    case TOKEN_STRING: return "string";
+    case TOKEN_PLUSEQUALS: return "+=";
+    case TOKEN_MINUSEQUALS: return "-=";
+    case TOKEN_TIMESEQUALS: return "*=";
+    case TOKEN_DIVEQUALS: return "/=";
+    case TOKEN_MODEQUALS: return "%=";
+    case TOKEN_ISEQUAL: return "==";
+    case TOKEN_ISNOTEQUAL: return "!=";
+    case TOKEN_LOGICAL_AND: return "&&";
+    case TOKEN_LOGICAL_OR: return "||";
+    case TOKEN_LESSEQUALS: return "<=";
+    case TOKEN_GREATEREQUALS: return ">=";
 
-    // switch (operator_type) {
-    // case TOKEN_DOUBLE_EQUAL:  return "==";
-    // case TOKEN_NOT_EQUAL:     return "!=";
-    // case TOKEN_GREATER_EQUAL: return ">=";
-    // case TOKEN_LESS_EQUAL:    return "<=";
-    // default:                  return "(unknown operator)";
-    // }
+    case TOKEN_RIGHT_ARROW: return "->";
+    case TOKEN_DOUBLE_DOT: return "..";
+
+    case TOKEN_POINTER_DEREFERENCE_OR_SHIFT_LEFT: return "<<";
+    case TOKEN_SHIFT_RIGHT: return ">>";
+    case TOKEN_BITWISE_AND_EQUALS: return "&=";
+    case TOKEN_BITWISE_OR_EQUALS: return "|=";
+    case TOKEN_BITWISE_XOR_EQUALS: return "^=";
+    
+    case TOKEN_KEYWORD_IF: return "if";
+    case TOKEN_KEYWORD_THEN: return "then";
+    case TOKEN_KEYWORD_ELSE: return "else";
+    // case TOKEN_KEYWORD_CASE: return "case";
+    case TOKEN_KEYWORD_RETURN: return "return";
+    case TOKEN_KEYWORD_STRUCT: return "struct";
+    case TOKEN_KEYWORD_WHILE: return "while";
+    case TOKEN_KEYWORD_BREAK: return "break";
+    case TOKEN_KEYWORD_CONTINUE: return "continue";
+    case TOKEN_KEYWORD_USING: return "using";
+
+    case TOKEN_KEYWORD_DEFER: return "defer";
+    case TOKEN_KEYWORD_SIZE_OF: return "size_of";
+    case TOKEN_KEYWORD_TYPE_OF: return "type_of";
+    case TOKEN_KEYWORD_INITIALIZER_OF: return "initializer_of";
+    case TOKEN_KEYWORD_TYPE_INFO: return "type_info";
+    case TOKEN_KEYWORD_NULL: return "null";
+
+    case TOKEN_KEYWORD_ENUM: return "enum";
+    case TOKEN_KEYWORD_TRUE: return "true";
+    case TOKEN_KEYWORD_FALSE: return "false";
+    case TOKEN_KEYWORD_UNION: return "union";
+
+    case TOKEN_NOTE: return "note";
+    case TOKEN_END_OF_INPUT: return "end of input";
+
+    case TOKEN_ERROR: return "error";
+
+    default: return "**INVALID**";
+    }
 }
 
 const char *ast_to_string(const Ast *ast)
@@ -122,7 +168,7 @@ const char *ast_to_string(const Ast *ast)
             const Ast_Binary_Operator *bin = Down(ast);
             return tprint("(%s %s %s)",
                 ast_to_string(bin->left),
-                operator_type_to_string(bin->operator_type),
+                token_type_to_string(bin->operator_type),
                 ast_to_string(bin->right));
         }
         

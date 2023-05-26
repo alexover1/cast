@@ -15,8 +15,9 @@
 #    include "windows.h"
 #endif // _WIN32
 
+#include "common.h"
 #include "lexer.h"
-#include "vendor/context_alloc.h"
+#include "string_builder.h"
 #include "vendor/stb_ds.h"
 
 #define lexer_current_character_index(lexer) ((lexer)->current_line.data - (lexer)->current_line_start)
@@ -50,7 +51,7 @@ static bool parse_int_value(String_View s, unsigned int base, uint64_t *out)
         result = result * base + (uint64_t) s.data[i] - '0';
     }
     if (out) *out = result;
-    return i == s.count-1;
+    return i == s.count;
 }
 
 static inline void lexer_parse_maybe_equals_token(Lexer *lexer, Token *token, Token_Type type_with_equals)
@@ -166,12 +167,12 @@ Token lexer_eat_token(Lexer *lexer)
     // Find next non-empty line.
 
     while (lexer_current_line_is_empty(lexer) && lexer->current_input.count > 0) {
-       lexer_next_line(lexer); 
+        lexer_next_line(lexer); 
     }
 
     Token token;
     token.type = TOKEN_END_OF_INPUT;
-    token.l0 = lexer->current_line_number;
+    token.line = lexer->current_line_number;
     token.c0 = lexer_current_character_index(lexer);
     token.c1 = token.c0 + 1;
 
@@ -271,6 +272,7 @@ Token lexer_eat_token(Lexer *lexer)
     case ',':
     case ':':
     case ';':
+    case '~':
         break;
     default:
         token.type = TOKEN_ERROR;
@@ -279,15 +281,16 @@ Token lexer_eat_token(Lexer *lexer)
     return token;
 }
 
-void lexer_next_line(Lexer *lexer)
+inline void lexer_next_line(Lexer *lexer)
 {
     lexer->current_line = sv_chop_by_delim(&lexer->current_input, '\n');
+    lexer->current_line = sv_trim_left(lexer->current_line); // TODO: if we want to preserve indentation this must be called after arrput.
     lexer->current_line_start = lexer->current_line.data;
     lexer->current_line_number += 1;
     arrput(lexer->lines, lexer->current_line);
 }
 
-Token lexer_peek_token(Lexer *lexer)
+inline Token lexer_peek_token(Lexer *lexer)
 {
     if (lexer->peek_full) return lexer->peek_token;
     lexer->peek_token = lexer_eat_token(lexer);
@@ -295,31 +298,13 @@ Token lexer_peek_token(Lexer *lexer)
     return lexer->peek_token;
 }
 
-Token lexer_next_token(Lexer *lexer)
+inline Token lexer_next_token(Lexer *lexer)
 {
     if (lexer->peek_full) {
         lexer->peek_full = false;
         return lexer->peek_token;
     }
     return lexer_eat_token(lexer);
-}
-
-Lexer_Position position_from_lexer(const Lexer *lexer)
-{
-    Lexer_Position pos;
-    pos.l0 = lexer->current_line_number;
-    pos.c0 = lexer_current_character_index(lexer);
-    pos.c1 = pos.c0 + 1;
-    return pos;
-}
-
-Lexer_Position position_from_token(Token token)
-{
-    Lexer_Position pos;
-    pos.l0 = token.l0;
-    pos.c0 = token.c0;
-    pos.c1 = token.c1;
-    return pos;
 }
 
 #define RED   "\x1B[31m"
@@ -332,40 +317,71 @@ Lexer_Position position_from_token(Token token)
 #define RESET "\x1B[0m"
 #define TAB   "    "
 
-void lexer_report_error(const Lexer *lexer, Lexer_Position pos, const char *fmt, ...)
+void lexer_report_error(const Lexer *lexer, Token token, const char *fmt, ...)
 {
-    if (pos.l0 == 0) {
-        pos = position_from_lexer(lexer);
+    if (token.line == 0) {
+        // Default location if null token is passed.
+        token.line = lexer->current_line_number;
+        token.c0 = lexer_current_character_index(lexer);
+        token.c1 = token.c0 + 1;
     }
+
     va_list args;
     va_start(args, fmt);
     const char *msg = vtprint(fmt, args);
     assert(msg);
 
-    // Display the error message.
-    fprintf(stderr, Loc_Fmt": Error: %s\n", SV_Arg(lexer->path_name), pos.l0, pos.c0, msg);
+    // Setup the allocator and init string builder.
 
-    fputc('\n', stderr);
+    Arena *previous_arena = context_arena;
+    context_arena = &temporary_arena;
+
+    String_Builder sb = {0};
+
+    // Display the error message.
+    sb_print(&sb, Loc_Fmt": Error: %s\n", SV_Arg(lexer->path_name), token.line + 1, token.c0 + 1, msg);
+
+    sb_append(&sb, "\n", 1);
+
+    // TODO: I want to "normalize" the indentation.
+    // When we add lines to the lexer, we can add it
+    // after it has been trimmed to remove leading spaces.
+    // However, when printing the previous line, if they differ
+    // in indentation I want to show that somehow.
+    // Basically, if we are like 10 scopes deep in a function,
+    // I want to only print indentation 1 level deeper or shallower
+    // than the current line, so that when printing diagnostics we
+    // don't end up printing like 50 spaces.
 
     // Display the previous line if it exists.
-    if (pos.l0 >= 2) {
-        fprintf(stderr, TAB CYN "\t"SV_Fmt"\n" RESET, SV_Arg(lexer->lines[pos.l0-1]));
+    
+    if (token.line > 0) {
+        sb_print(&sb, TAB CYN SV_Fmt "\n" RESET, SV_Arg(lexer->lines[token.line-1]));
+    } else {
+        // TODO: I kinda want to print the next line.
     }
 
     // Highlight the token in red.
-    int n = pos.c1 - pos.c0;
-    String_View line = lexer->lines[pos.l0-1];
-    fprintf(stderr, TAB CYN "%.*s" RED "%.*s" CYN "%.*s\n" RESET,
-        pos.c0, line.data,                  // before
-        n, line.data + pos.c0,              // token
-        (int)line.count - n, line.data + pos.c1  // after
-    );
-    
+
+    String_View line = lexer->lines[token.line];
+
+    sb_print(&sb, TAB CYN SV_Fmt, token.c0, line.data);
+    sb_print(&sb,     RED SV_Fmt, token.c1 - token.c0, line.data + token.c0);
+    sb_print(&sb,     CYN SV_Fmt, (int)line.count - token.c0 - 1, line.data + token.c1);
+
+    sb_append_cstr(&sb, "\n\n" RESET);
+
+    // Finally, print the string builder to stderr and exit.
+
+    context_arena = previous_arena;
+
+    fprintf(stderr, SV_Fmt, SV_Arg(sb));
     exit(1);
+
     va_end(args);
 }
 
-void lexer_init(Lexer *l, String_View input)
+inline void lexer_init(Lexer *l, String_View input)
 {
     assert(input.data != NULL);
     
@@ -376,7 +392,7 @@ void lexer_init(Lexer *l, String_View input)
     l->current_input = input;
     l->current_line = SV_NULL;
     l->current_line_start = NULL;
-    l->current_line_number = 0;
+    l->current_line_number = -1;
 
     // l->peek_token can stay uninitialized as we should never read from it directly
     l->peek_full = false;

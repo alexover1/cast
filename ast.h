@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "vendor/sv.h" // for Ast_Ident.name
 
 typedef enum {
     AST_UNINITIALIZED = 0,
@@ -68,7 +69,7 @@ typedef struct {
     union {
         uint64_t int_value;
         float float_value;
-        struct { const char *data; uint64_t count; } string_value;
+        String_View string_value;
     };
 } Ast_Literal;
 
@@ -78,8 +79,6 @@ typedef struct {
     const char *name;
     Ast_Block *enclosing_block;
 } Ast_Ident;
-
-Ast_Ident make_identifier(const char *name, Ast_Block *enclosing_block);
 
 typedef struct {
     Ast base;

@@ -11,8 +11,11 @@
 #include "interp.h"
 
 Arena temporary_arena = {0};
-Arena *context_arena = &temporary_arena;
+Arena general_arena = {0};
+Arena *context_arena = &general_arena;
 fprintf_t context_logger = fprintf;
+
+Ast_Ident make_identifier(const char *name, Ast_Block *enclosing_block);
 
 int main(int argc, char **argv)
 {   
@@ -38,16 +41,35 @@ int main(int argc, char **argv)
         exit(1);
     }
 
-    Lexer lexer;
-    lexer_init(&lexer, input);
-    lexer.path_name = input_file_path;
-    lexer.file_name = path_get_file_name(input_file_path.data);
+    Arena arena = {0};
 
-    Token token = lexer_next_token(&lexer);
-    while (token.type != TOKEN_END_OF_INPUT) {
-        token = lexer_next_token(&lexer);
-        lexer_report_error(&lexer, position_from_token(token), "This is illegal.");
-    }
+    Parser parser;
+    parser.arena = &arena;
+    parser.block = NULL;
+
+    lexer_init(&parser.lexer, input);
+    parser.lexer.path_name = input_file_path;
+    parser.lexer.file_name = path_get_file_name(input_file_path.data);
+
+    Ast *ast = parse_expression(&parser);
+    Ast *ast2 = parse_expression(&parser);
+
+    printf("%s\n", ast_to_string(ast));
+    printf("%s\n", ast_to_string(ast2));
+
+    // Lexer lexer;
+    // lexer_init(&lexer, input);
+    // lexer.path_name = input_file_path;
+    // lexer.file_name = path_get_file_name(input_file_path.data);
+
+    // Token token = lexer_next_token(&lexer);
+    // while (token.type != TOKEN_END_OF_INPUT) {
+    //     token = lexer_next_token(&lexer);
+    //     lexer_report_error(&lexer, position_from_token(token), "This is illegal.");
+    // }
+
+    arena_summary(&general_arena);
+    arena_summary(&temporary_arena);
 
     return 0;
     
