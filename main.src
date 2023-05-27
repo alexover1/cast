@@ -1,2 +1,4 @@
-5 * 2
-if x print("Yes, x is true.\n");
+while true {
+	if x == 0 return 5;
+	break;
+}

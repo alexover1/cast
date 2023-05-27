@@ -51,11 +51,8 @@ int main(int argc, char **argv)
     parser.lexer.path_name = input_file_path;
     parser.lexer.file_name = path_get_file_name(input_file_path.data);
 
-    Ast *ast = parse_expression(&parser);
-    Ast *ast2 = parse_expression(&parser);
-
+    Ast *ast = parse_statement(&parser);
     printf("%s\n", ast_to_string(ast));
-    printf("%s\n", ast_to_string(ast2));
 
     // Lexer lexer;
     // lexer_init(&lexer, input);
@@ -67,9 +64,6 @@ int main(int argc, char **argv)
     //     token = lexer_next_token(&lexer);
     //     lexer_report_error(&lexer, position_from_token(token), "This is illegal.");
     // }
-
-    arena_summary(&general_arena);
-    arena_summary(&temporary_arena);
 
     return 0;
     

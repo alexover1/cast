@@ -185,6 +185,7 @@ Token lexer_eat_token(Lexer *lexer)
         token.c1 = lexer_current_character_index(lexer);
 
         if (isdigit(c)) {
+            token.number_flags = 0;
             bool ok = parse_int_value(literal, 10, &token.int_value);
             token.type = ok ? TOKEN_NUMBER : TOKEN_ERROR;
             return token;

@@ -25,6 +25,7 @@ typedef enum {
     AST_STRUCT = 16,
 
     AST_DECLARATION = 17,
+    AST_USING = 18,
 } Ast_Type;
 
 typedef struct {
@@ -60,6 +61,8 @@ typedef enum {
     LITERAL_INT    = 0,
     LITERAL_FLOAT  = 1,
     LITERAL_STRING = 2,
+    LITERAL_BOOL   = 3,
+    LITERAL_NULL   = 4,
 } Literal_Kind;
 
 typedef struct {
@@ -70,6 +73,7 @@ typedef struct {
         uint64_t int_value;
         float float_value;
         String_View string_value;
+        bool bool_value;
     };
 } Ast_Literal;
 
@@ -111,18 +115,34 @@ typedef struct {
 
 typedef struct {
     Ast base;
+
+    Ast *condition_expression;
+    Ast *then_statement;
 } Ast_While;
+
+enum {
+    IF_STATEMENT_IS_STATIC = 0x1,
+};
 
 typedef struct {
     Ast base;
+
+    uint8_t flags;
+    Ast *condition_expression;
+    Ast *then_statement;
+    Ast *else_statement;
 } Ast_If;
 
 typedef struct {
     Ast base;
+
+    int keyword_type; // BREAK or CONTINUE
 } Ast_Loop_Control;
 
 typedef struct {
     Ast base;
+
+    Ast *subexpression;
 } Ast_Return;
 
 typedef struct Ast_Type_Definition Ast_Type_Definition;
@@ -182,6 +202,12 @@ struct Ast_Struct {
     
     Ast_Block scope;
 };
+
+typedef struct {
+    Ast base;
+
+    Ast *subexpression;
+} Ast_Using;
 
 enum {
     DECLARATION_IS_COMPTIME = 0x1,

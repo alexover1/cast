@@ -158,6 +158,8 @@ const char *ast_to_string(const Ast *ast)
             case LITERAL_INT:    return tprint("%llu", lit->int_value);
             case LITERAL_FLOAT:  return tprint("%f", lit->float_value);
             case LITERAL_STRING: return tprint("\"%*.s\"", lit->string_value.count, lit->string_value.data);
+            case LITERAL_BOOL:   return lit->bool_value ? "true" : "false";
+            case LITERAL_NULL:   return "null";
             }
             UNREACHABLE;
         }
@@ -258,6 +260,36 @@ const char *ast_to_string(const Ast *ast)
 
             context_arena = saved;
             return sb.data;
+        }
+
+        case AST_IF: {
+            const Ast_If *if_stmt = Down(ast);
+            if (if_stmt->else_statement != NULL) {
+                return tprint("if %s then %s else %s",
+                    ast_to_string(if_stmt->condition_expression),
+                    ast_to_string(if_stmt->then_statement),
+                    ast_to_string(if_stmt->else_statement));
+            }
+            return tprint("if %s then %s",
+                ast_to_string(if_stmt->condition_expression),
+                ast_to_string(if_stmt->then_statement));
+        }
+
+        case AST_WHILE: {
+            const Ast_While *while_stmt = Down(ast);
+            return tprint("while %s %s",
+                ast_to_string(while_stmt->condition_expression),
+                ast_to_string(while_stmt->then_statement));
+        }
+
+        case AST_LOOP_CONTROL: {
+            const Ast_Loop_Control *loop_control = Down(ast);
+            return token_type_to_string(loop_control->keyword_type);
+        }
+
+        case AST_RETURN: {
+            const Ast_Return *ret = Down(ast);
+            return tprint("return %s", ast_to_string(ret->subexpression));
         }
 
         case AST_LAMBDA_BODY: {
