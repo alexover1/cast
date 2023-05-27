@@ -307,3 +307,8 @@ inline Ast *parse_expression(Parser *p)
 {
     return parse_binary_expression(p, NULL, 1);
 }
+
+// TODO: Function calls
+// TODO: Declarations
+// TODO: Type instantiations
+// TODO: Type definitions
