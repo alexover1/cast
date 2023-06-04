@@ -6,22 +6,24 @@
 #include "type_info.h"
 #include "vendor/stb_ds.h"
 
-const char *type_to_string(Type type)
+const char *type_to_string(const Type_Table *table, const Type_Info *type)
 {
     if (type == NULL) return "**NULL**";
     
     // Builtin types
-    if (type == &type_info_int)             return "int";
-    if (type == &type_info_float)           return "float";
-    if (type == &type_info_float64)         return "float64";
-    if (type == &type_info_comptime_int)    return "comptime_int";
-    if (type == &type_info_comptime_float)  return "comptime_float";
-    if (type == &type_info_comptime_string) return "comptime_string";
+    if (type == table->INT)             return "int";
+    if (type == table->FLOAT)           return "float";
+    if (type == table->BOOL)            return "bool";
+    if (type == table->float64)         return "float64";
+    if (type == table->anyptr)          return "anyptr";
+    if (type == table->comptime_int)    return "comptime_int";
+    if (type == table->comptime_float)  return "comptime_float";
+    if (type == table->comptime_string) return "comptime_string";
     
     // Otherwise, construct the string dynamically
     switch (type->tag) {
         case TYPE_INTEGER:
-            if (type->integer.sign) {
+            if (((const Type_Info_Integer *)type)->sign) {
                 return tprint("s%ld", type->runtime_size * 8);
             }
             return tprint("u%ld", type->runtime_size * 8);
@@ -38,13 +40,15 @@ const char *type_to_string(Type type)
             context_arena = &temporary_arena;
             String_Builder sb = {0};
 
+            const Type_Info_Procedure *proc = (const Type_Info_Procedure *)type;
+
             sb_append_cstr(&sb, "(");
-            for (size_t i = 0; i < type->procedure.parameter_count; ++i) {
+            for (size_t i = 0; i < proc->parameter_count; ++i) {
                 if (i > 0) sb_append_cstr(&sb, ", ");
-                sb_append_cstr(&sb, type_to_string(type->procedure.parameters[i]));
+                sb_append_cstr(&sb, type_to_string(table, proc->parameters[i]));
             }
             sb_append_cstr(&sb, ") -> ");
-            sb_append_cstr(&sb, type_to_string(type->procedure.return_type));
+            sb_append_cstr(&sb, type_to_string(table, proc->return_type));
 
             context_arena = old;
             return sb.data;
@@ -55,9 +59,12 @@ const char *type_to_string(Type type)
             context_arena = &temporary_arena;
             String_Builder sb = {0};
 
+            const Type_Info_Struct *struct_info = (const Type_Info_Struct *)type;
+
             sb_append_cstr(&sb, "{ ");
-            for (size_t i = 0; i < type->structure.field_count; ++i) {
-                sb_print(&sb, "%s: %s; ", type->structure.names[i], type_to_string(type->structure.types[i]));
+            for (size_t i = 0; i < struct_info->field_count; ++i) {
+                Type_Info_Struct_Field *field = struct_info->field_data + i;
+                sb_print(&sb, "%s: %s; ", field->name, type_to_string(table, field->type));
             }
             sb_append_cstr(&sb, "}");
 
@@ -65,15 +72,19 @@ const char *type_to_string(Type type)
             return sb.data;
         }
 
-        case TYPE_POINTER: return tprint("*%s", type_to_string(type->pointer.element_type));
+        case TYPE_POINTER: {
+            const Type_Info_Pointer *pointer = Down(type);
+            return tprint("*%s", type_to_string(table, pointer->element_type));
+        }
 
         case TYPE_ARRAY: {
-            if (type->array.element_count >= 0) {
+            const Type_Info_Array *array = Down(type);
+            if (array->element_count >= 0) {
                 return tprint("[%ld]%s",
-                    type->array.element_count,
-                    type_to_string(type->array.element_type));
+                    array->element_count,
+                    type_to_string(table, array->element_type));
             }
-            return tprint("[]%s", type_to_string(type->array.element_type));
+            return tprint("[]%s", type_to_string(table, array->element_type));
         }
 
         default: return "**INVALID**";

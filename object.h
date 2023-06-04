@@ -1,5 +1,7 @@
 #pragma once
 
+#include <llvm-c/Core.h>
+
 #include "ast.h"
 #include "type_info.h"
 #include "ir_builder.h"
@@ -11,9 +13,13 @@ typedef struct Object Object;
 
 struct Object {
     const Ast_Declaration *key;
-    Type inferred_type;
-    ptrdiff_t index_within_type_table; // positive only if this is a typedef
-    Ir_Index ir_index;
+    const Type_Info *inferred_type;
+
+    union {
+        LLVMValueRef llvm_value;
+        Type type_value;
+        // Inst_Addr instruction_address;
+    };
 };
 
 Object init_object(const Ast_Declaration *declaration);

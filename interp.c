@@ -21,7 +21,7 @@ static void infer_object(Interp *interp, Object *object)
         assert(inst->type_definition);
 
         // This still might return NULL.
-        object->inferred_type = interp_create_type(interp, inst->type_definition);
+        object->inferred_type = interp_get_type(interp, inst->type_definition);
         return;
     }
         
@@ -30,17 +30,14 @@ static void infer_object(Interp *interp, Object *object)
     if (ast->type == AST_TYPE_DEFINITION) {
         const Ast_Type_Definition *defn = Down(ast);
 
-        Type created_type = interp_create_type(interp, defn);
+        object->type_value = interp_get_type(interp, defn);
 
-        if (created_type) {
-            object->index_within_type_table = hmlen(interp->type_table);
-            hmput(interp->type_table, defn, created_type);
-
+        if (object->type_value != NULL) {
             // We only want to set the inferred type if we successfully created our type.
-            object->inferred_type = &type_info_type;
+            object->inferred_type = interp->type_table.TYPE;
 
             #if defined(INTERP_DO_TRACING)
-                printf("[defn] %s :: %s (%ld)\n", decl->ident.name, type_to_string(created_type), object->index_within_type_table);
+                printf("[defn] %s :: %s\n", decl->ident.name, type_to_string(&interp->type_table, object->type_value));
             #endif
         } 
 
@@ -51,19 +48,19 @@ static void infer_object(Interp *interp, Object *object)
 
     // Replace comptime types for non-comptime declarations.
 
-    if (object->inferred_type && (decl->flags & DECLARATION_IS_COMPTIME) == 0) {
-        if (object->inferred_type == &type_info_comptime_int)         object->inferred_type = &type_info_int;
-        else if (object->inferred_type == &type_info_comptime_float)  object->inferred_type = &type_info_float;
-        else if (object->inferred_type == &type_info_comptime_string) object->inferred_type = &type_info_string;
+    if (object->inferred_type != NULL && (decl->flags & DECLARATION_IS_COMPTIME) == 0) {
+        if (object->inferred_type == interp->type_table.comptime_int)         object->inferred_type = interp->type_table.INT;
+        else if (object->inferred_type == interp->type_table.comptime_float)  object->inferred_type = interp->type_table.FLOAT;
+        else if (object->inferred_type == interp->type_table.comptime_string) object->inferred_type = interp->type_table.STRING;
     }
 }
 
-Type interp_create_type(Interp *interp, const Ast_Type_Definition *defn)
+Type interp_get_type(Interp *interp, const Ast_Type_Definition *defn)
 {
     if (defn->struct_desc) {
         const Ast_Block *block = &defn->struct_desc->scope;
 
-        ptrdiff_t *indices = NULL;
+        ptrdiff_t *children = NULL;
 
         For (block->statements) {
             if (block->statements[it]->type != AST_DECLARATION) continue;
@@ -72,40 +69,34 @@ Type interp_create_type(Interp *interp, const Ast_Type_Definition *defn)
 
             if (decl->flags & DECLARATION_IS_COMPTIME) continue; // Skip comptime.
             
-            ptrdiff_t index = hmgeti(interp->object_table, decl);
-            assert(index >= 0);
+            ptrdiff_t child = hmgeti(interp->objects, decl);
+            assert(child >= 0);
 
-            if (interp->object_table[index].inferred_type == NULL) {
+            if (interp->objects[child].inferred_type == NULL) {
                 // Child is not finished, so we can't make our type yet.
                 return NULL;
             }
 
-            arrput(indices, index);
+            arrput(children, child);
         }
 
-        // If only C had builtin SOA...
+        size_t n = arrlenu(children);
 
-        Type_Info *info = context_alloc(sizeof(Type_Info));
-        info->tag = TYPE_STRUCT;
-        Type_Info_Struct *structure = &info->structure;
+        Type_Info_Struct struct_type;
+        struct_type.info.tag = TYPE_STRUCT;
+        struct_type.info.runtime_size = -1;
+        struct_type.field_data = arena_alloc(&interp->type_table.arena, n * sizeof(Type_Info_Struct_Field));
+        struct_type.field_count = n;
 
-        if (arrlenu(indices) > 0) {
-            size_t member_size = sizeof(Type) + sizeof(const char *) + sizeof(size_t);
-            size_t n = arrlenu(indices);
-
-            structure->types   = (Type *)        context_alloc(n*member_size);
-            structure->names   = (const char **) structure->types + n*sizeof(Type);
-            structure->offsets = (size_t *)      structure->names + n*sizeof(const char *);
-            structure->field_count = n;
-
-            For (indices) {
-                Object *object = &interp->object_table[indices[it]];
-                structure->types[it] = object->inferred_type;
-                structure->names[it] = object->key->ident.name;
-            }
+        For (children) {
+            Object *object = &interp->objects[children[it]];
+            Type_Info_Struct_Field *field = struct_type.field_data + it;
+            field->type = object->inferred_type;
+            field->name = object->key->ident.name;
+            field->offset = -1;
         }
 
-        return (Type)info;
+        return type_table_append(&interp->type_table, &struct_type, sizeof(struct_type));
     }
 
     if (defn->enum_defn) {
@@ -113,7 +104,7 @@ Type interp_create_type(Interp *interp, const Ast_Type_Definition *defn)
     }
 
     if (defn->literal_name) {
-        return parse_literal_type(defn->literal_name, strlen(defn->literal_name)); // TODO: store literal_name sized
+        return parse_literal_type(&interp->type_table, defn->literal_name, strlen(defn->literal_name)); // TODO: store literal_name sized
     }
 
     if (defn->type_name) {
@@ -122,14 +113,14 @@ Type interp_create_type(Interp *interp, const Ast_Type_Definition *defn)
             fprintf(stderr, "error: Undeclared identifier '%s'\n", defn->type_name->name);
             exit(1);
         }
-        Object *object = hmgetp_null(interp->object_table, decl);
+        Object *object = hmgetp_null(interp->objects, decl);
         assert(object);
-        if (!object->inferred_type) return NULL; // We must wait on this.
-        if (object->index_within_type_table < 0) {
+        if (object->inferred_type == NULL) return NULL; // We must wait on this.
+        if (object->inferred_type != interp->type_table.TYPE) {
             fprintf(stderr, "error: '%s' is not a type\n", ast_to_string(Down(decl->expression)));
             exit(1);
         }
-        return interp->type_table[object->index_within_type_table].value;
+        return object->type_value;
     }
 
     if (defn->array_element_type) {
@@ -144,7 +135,7 @@ Type interp_create_type(Interp *interp, const Ast_Type_Definition *defn)
         UNIMPLEMENTED;
     }
 
-    return NULL;
+    UNREACHABLE;
 }
 
 void interp_add_scope(Interp *interp, const Ast_Block *block)
@@ -173,37 +164,33 @@ void interp_add_scope(Interp *interp, const Ast_Block *block)
         }
         
         Object object = init_object(decl);
-        hmputs(interp->object_table, object);
+        ptrdiff_t i = hmlen(interp->objects);
+        hmputs(interp->objects, object);
+        arrput(interp->queue, &interp->objects[i]);
     }
 }
 
 void interp_run_main_loop(Interp *interp)
 {
-    size_t iterations = 0;
-    bool halting = false;
+    while (arrlenu(interp->queue)) {
+        size_t i = 0;
+        while (i < arrlenu(interp->queue)) {
+            infer_object(interp, interp->queue[i]);
 
-    while (!halting) {
-        halting = true;
-        iterations += 1;
-
-        for (ptrdiff_t i = 0; i < hmlen(interp->object_table); ++i) {
-            infer_object(interp, &interp->object_table[i]);
-
-            if (interp->object_table[i].inferred_type == NULL) {
-                halting = false;
+            if (interp->queue[i]->inferred_type) {
+                arrdelswap(interp->queue, i);
+            } else {
+                i += 1;
             }
         }
     }
-
-    printf("[interp] Ran %zu iterations\n", iterations);
 }
 
 Interp init_interp(void)
 {
     Interp interp;
-    interp.object_table = NULL;
-    interp.type_table = NULL;
-    hmdefault(interp.type_table, NULL); // Default to NULL Type.
+    interp.objects = NULL;
+    interp.type_table = type_table_init();
     return interp;
 }
 
@@ -212,8 +199,6 @@ Object init_object(const Ast_Declaration *declaration)
     Object object;
     object.key = declaration;
     object.inferred_type = NULL;
-    object.index_within_type_table = -1;
-    object.ir_index = -1;
+    object.type_value = NULL;
     return object;
 }
-

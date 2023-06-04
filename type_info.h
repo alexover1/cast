@@ -4,9 +4,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-typedef struct Type_Info Type_Info;
-typedef const Type_Info *Type;
-
 typedef enum {
     TYPE_INTEGER = 1,
     TYPE_FLOAT = 2,
@@ -21,68 +18,62 @@ typedef enum {
 } Type_Info_Tag;
 
 typedef struct {
+    Type_Info_Tag tag;
+    int32_t runtime_size;
+    int64_t type_table_index;
+} Type_Info;
+
+typedef const Type_Info *Type;
+
+typedef struct {
+    Type_Info info;
     bool sign;
 } Type_Info_Integer;
 
-typedef void Type_Info_Bool;
-typedef void Type_Info_Float;
-typedef void Type_Info_String;
-typedef void Type_Info_Void;
-
 typedef struct {
+    Type_Info info; // @using
     Type *parameters; // @array
     size_t parameter_count;
     Type return_type;
 } Type_Info_Procedure;
 
 typedef struct {
+    Type type;
+    const char *name;
+    int64_t offset;
+} Type_Info_Struct_Field;
+
+typedef struct {
+    Type_Info info; // @using
+    Type_Info_Struct_Field *field_data;
     size_t field_count;
-    Type *types; // @soa
-    const char **names;
-    size_t *offsets;
 } Type_Info_Struct;
 
 typedef struct {
+    Type_Info info; // @using
     Type element_type;
 } Type_Info_Pointer;
 
 typedef struct {
+    Type_Info info; // @using
     Type element_type;
     int64_t element_count; // -1 for slice
 } Type_Info_Array;
 
-struct Type_Info {
-    Type_Info_Tag tag;
-    int32_t runtime_size;
-   
-    union {
-        Type_Info_Integer integer;
-        // Type_Info_Bool _bool;
-        // Type_Info_Float _float;
-        // Type_Info_String _string;
-        // Type_Info_Void _void;
-        Type_Info_Procedure procedure;
-        Type_Info_Struct structure;
-        Type_Info_Pointer pointer;
-        Type_Info_Array array;
-        // Type_Info_Type _type;
-    };
-};
+typedef struct {
+    Arena arena;
+    Type *types; // @malloced with stb_ds
 
-const char *type_to_string(Type type);
-Type parse_literal_type(const char *lit, size_t n);
-bool types_are_equal(Type a, Type b);
+    Type INT, FLOAT, BOOL, VOID, STRING;
+    Type TYPE, CODE;
+    Type s8, s16, s32, s64;
+    Type u8, u16, u32, u64;
+    Type comptime_int, comptime_float, comptime_string; // TODO: maybe add an AUTOCAST type?
+    Type float64, anyptr;
+} Type_Table;
 
-// Thread-safe because we never write:
-extern const Type_Info type_info_int;
-extern const Type_Info type_info_s64;
-extern const Type_Info type_info_float;
-extern const Type_Info type_info_float64;
-extern const Type_Info type_info_string;
-extern const Type_Info type_info_bool;
-extern const Type_Info type_info_void;
-extern const Type_Info type_info_type;
-
-extern const Type_Info type_info_comptime_int;
-extern const Type_Info type_info_comptime_float;
-extern const Type_Info type_info_comptime_string;
+Type_Table type_table_init(void);
+Type parse_literal_type(const Type_Table *table, const char *lit, size_t n);
+Type type_table_append(Type_Table *table, void *item, size_t item_size);
+const char *type_to_string(const Type_Table *table, Type offset);
+bool types_are_equal(const Type_Table *table, Type offset_a, Type offset_b);
