@@ -303,9 +303,71 @@ Ast *parse_statement(Parser *p)
     return result;
 }
 
-inline Ast *parse_expression(Parser *p)
+#define RED   "\x1B[31m"
+#define GRN   "\x1B[32m"
+#define YEL   "\x1B[33m"
+#define BLU   "\x1B[34m"
+#define MAG   "\x1B[35m"
+#define CYN   "\x1B[36m"
+#define WHT   "\x1B[37m"
+#define RESET "\x1B[0m"
+#define TAB   "    "
+
+void parser_report_error(Parser *parser, Token token, const char *format, ...)
 {
-    return parse_binary_expression(p, NULL, 1);
+    va_list args;
+    va_start(args, format);
+    const char *msg = vtprint(format, args);
+    assert(msg);
+
+    // Setup the allocator and init string builder.
+
+    Arena *previous_arena = context_arena;
+    context_arena = &temporary_arena;
+
+    String_Builder sb = {0};
+
+    // Display the error message.
+    sb_print(&sb, Loc_Fmt": Error: %s\n", SV_Arg(parser->path_name), token.line + 1, token.c0 + 1, msg);
+
+    sb_append(&sb, "\n", 1);
+
+    // TODO: I want to "normalize" the indentation.
+    // When we add lines to the parser, we can add it
+    // after it has been trimmed to remove leading spaces.
+    // However, when printing the previous line, if they differ
+    // in indentation I want to show that somehow.
+    // Basically, if we are like 10 scopes deep in a function,
+    // I want to only print indentation 1 level deeper or shallower
+    // than the current line, so that when printing diagnostics we
+    // don't end up printing like 50 spaces.
+
+    // Display the previous line if it exists.
+    
+    if (token.line > 0) {
+        sb_print(&sb, TAB CYN SV_Fmt "\n" RESET, SV_Arg(parser->lines[token.line-1]));
+    } else {
+        // TODO: I kinda want to print the next line.
+    }
+
+    // Highlight the token in red.
+
+    String_View line = parser->lines[token.line];
+
+    sb_print(&sb, TAB CYN SV_Fmt, token.c0, line.data);
+    sb_print(&sb,     RED SV_Fmt, token.c1 - token.c0, line.data + token.c0);
+    sb_print(&sb,     CYN SV_Fmt, (int)line.count - token.c0 - 1, line.data + token.c1);
+
+    sb_append_cstr(&sb, "\n\n" RESET);
+
+    // Finally, print the string builder to stderr and exit.
+
+    context_arena = previous_arena;
+
+    fprintf(stderr, SV_Fmt, SV_Arg(sb));
+    exit(1);
+
+    va_end(args);
 }
 
 inline void parser_init(Parser *parser, String_View input, String_View file_name, String_View path_name)
@@ -325,6 +387,11 @@ inline void parser_init(Parser *parser, String_View input, String_View file_name
     parser->peek_full = false;
 
     parser->block = NULL;
+}
+
+inline Ast *parse_expression(Parser *p)
+{
+    return parse_binary_expression(p, NULL, 1);
 }
 
 // TODO: Function calls

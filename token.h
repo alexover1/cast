@@ -29,6 +29,7 @@ typedef enum {
     TOKEN_GREATEREQUALS = 269,
 
     TOKEN_RIGHT_ARROW = 270,
+    // TODO: Should we parse left arrow even though we don't use it?
     TOKEN_DOUBLE_DOT = 271,
     // 272 is unused
 

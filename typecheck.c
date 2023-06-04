@@ -1,5 +1,5 @@
 #include "common.h"
-#include "lexer.h"
+#include "token.h"
 #include "ast.h"
 #include "type_info.h"
 #include "interp.h"

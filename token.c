@@ -40,6 +40,11 @@ static inline int eat_character(Parser *parser)
     return character;
 }
 
+static inline bool starts_identifier(char x)
+{
+    return isalpha(x) || x == '_';
+}
+
 static inline bool continues_identifier(char x)
 {
     return isalnum(x) || x == '_';
@@ -65,6 +70,30 @@ static inline void parse_maybe_equals_token(Parser *parser, Token *token, Token_
     }
 }
 
+static Token_Type parse_keyword_or_ident_token_type(String_View s)
+{
+    if (sv_eq(s, SV("if")))             return TOKEN_KEYWORD_IF;
+    if (sv_eq(s, SV("then")))           return TOKEN_KEYWORD_THEN;
+    if (sv_eq(s, SV("else")))           return TOKEN_KEYWORD_ELSE;
+    if (sv_eq(s, SV("return")))         return TOKEN_KEYWORD_RETURN;
+    if (sv_eq(s, SV("struct")))         return TOKEN_KEYWORD_STRUCT;
+    if (sv_eq(s, SV("while")))          return TOKEN_KEYWORD_WHILE;
+    if (sv_eq(s, SV("break")))          return TOKEN_KEYWORD_BREAK;
+    if (sv_eq(s, SV("continue")))       return TOKEN_KEYWORD_CONTINUE;
+    if (sv_eq(s, SV("using")))          return TOKEN_KEYWORD_USING;
+    if (sv_eq(s, SV("defer")))          return TOKEN_KEYWORD_DEFER;
+    if (sv_eq(s, SV("size_of")))        return TOKEN_KEYWORD_SIZE_OF;
+    if (sv_eq(s, SV("type_of")))        return TOKEN_KEYWORD_TYPE_OF;
+    if (sv_eq(s, SV("initializer_of"))) return TOKEN_KEYWORD_INITIALIZER_OF;
+    if (sv_eq(s, SV("type_info")))      return TOKEN_KEYWORD_TYPE_INFO;
+    if (sv_eq(s, SV("null")))           return TOKEN_KEYWORD_NULL;
+    if (sv_eq(s, SV("enum")))           return TOKEN_KEYWORD_ENUM;
+    if (sv_eq(s, SV("true")))           return TOKEN_KEYWORD_TRUE;
+    if (sv_eq(s, SV("false")))          return TOKEN_KEYWORD_FALSE;
+    if (sv_eq(s, SV("union")))          return TOKEN_KEYWORD_UNION;
+    return TOKEN_IDENT;
+}
+
 inline void parser_next_line(Parser *parser)
 {
     parser->current_line = sv_chop_by_delim(&parser->current_input, '\n');
@@ -72,32 +101,6 @@ inline void parser_next_line(Parser *parser)
     parser->current_line_start = parser->current_line.data;
     parser->current_line_number += 1;
     arrput(parser->lines, parser->current_line);
-}
-
-#define c_to_sv(cstr_lit) sv_from_parts((cstr_lit), sizeof(cstr_lit)-1)
-
-static Token_Type parse_keyword_or_ident_token_type(String_View s)
-{
-    if (sv_eq(s, SV("if"))) return TOKEN_KEYWORD_IF;
-    if (sv_eq(s, SV("then"))) return TOKEN_KEYWORD_THEN;
-    if (sv_eq(s, c_to_sv("else"))) return TOKEN_KEYWORD_ELSE;
-    if (sv_eq(s, c_to_sv("return"))) return TOKEN_KEYWORD_RETURN;
-    if (sv_eq(s, c_to_sv("struct"))) return TOKEN_KEYWORD_STRUCT;
-    if (sv_eq(s, c_to_sv("while"))) return TOKEN_KEYWORD_WHILE;
-    if (sv_eq(s, c_to_sv("break"))) return TOKEN_KEYWORD_BREAK;
-    if (sv_eq(s, c_to_sv("continue"))) return TOKEN_KEYWORD_CONTINUE;
-    if (sv_eq(s, c_to_sv("using"))) return TOKEN_KEYWORD_USING;
-    if (sv_eq(s, c_to_sv("defer"))) return TOKEN_KEYWORD_DEFER;
-    if (sv_eq(s, c_to_sv("size_of"))) return TOKEN_KEYWORD_SIZE_OF;
-    if (sv_eq(s, c_to_sv("type_of"))) return TOKEN_KEYWORD_TYPE_OF;
-    if (sv_eq(s, c_to_sv("initializer_of"))) return TOKEN_KEYWORD_INITIALIZER_OF;
-    if (sv_eq(s, c_to_sv("type_info"))) return TOKEN_KEYWORD_TYPE_INFO;
-    if (sv_eq(s, c_to_sv("null"))) return TOKEN_KEYWORD_NULL;
-    if (sv_eq(s, c_to_sv("enum"))) return TOKEN_KEYWORD_ENUM;
-    if (sv_eq(s, c_to_sv("true"))) return TOKEN_KEYWORD_TRUE;
-    if (sv_eq(s, c_to_sv("false"))) return TOKEN_KEYWORD_FALSE;
-    if (sv_eq(s, c_to_sv("union"))) return TOKEN_KEYWORD_UNION;
-    return TOKEN_IDENT;
 }
 
 Token find_next_token(Parser *parser)
@@ -120,17 +123,18 @@ Token find_next_token(Parser *parser)
 
     int c = peek_character(parser);
 
-    if (isalnum(c)) {
+    if (isdigit(c)) {
         String_View literal = sv_chop_left_while(&parser->current_line, continues_identifier);
         token.c1 = parser_current_character_index(parser);
+        token.number_flags = 0;
+        bool ok = parse_int_value(literal, 10, &token.int_value);
+        token.type = ok ? TOKEN_NUMBER : TOKEN_ERROR;
+        return token;
+    }
 
-        if (isdigit(c)) {
-            token.number_flags = 0;
-            bool ok = parse_int_value(literal, 10, &token.int_value);
-            token.type = ok ? TOKEN_NUMBER : TOKEN_ERROR;
-            return token;
-        }
-
+    if (starts_identifier(c)) {
+        String_View literal = sv_chop_left_while(&parser->current_line, continues_identifier);
+        token.c1 = parser_current_character_index(parser);
         token.type = parse_keyword_or_ident_token_type(literal);
         if (token.type == TOKEN_IDENT) {
             token.string_value = literal;
@@ -310,79 +314,4 @@ inline Token eat_next_token(Parser *parser)
     return find_next_token(parser);
 }
 
-#define RED   "\x1B[31m"
-#define GRN   "\x1B[32m"
-#define YEL   "\x1B[33m"
-#define BLU   "\x1B[34m"
-#define MAG   "\x1B[35m"
-#define CYN   "\x1B[36m"
-#define WHT   "\x1B[37m"
-#define RESET "\x1B[0m"
-#define TAB   "    "
-
-void parser_report_error(Parser *parser, Token token, const char *format, ...)
-{
-    if (token.line == 0) {
-        // Default location if null token is passed.
-        token.line = parser->current_line_number;
-        token.c0 = parser_current_character_index(parser);
-        token.c1 = token.c0 + 1;
-    }
-
-    va_list args;
-    va_start(args, format);
-    const char *msg = vtprint(format, args);
-    assert(msg);
-
-    // Setup the allocator and init string builder.
-
-    Arena *previous_arena = context_arena;
-    context_arena = &temporary_arena;
-
-    String_Builder sb = {0};
-
-    // Display the error message.
-    sb_print(&sb, Loc_Fmt": Error: %s\n", SV_Arg(parser->path_name), token.line + 1, token.c0 + 1, msg);
-
-    sb_append(&sb, "\n", 1);
-
-    // TODO: I want to "normalize" the indentation.
-    // When we add lines to the parser, we can add it
-    // after it has been trimmed to remove leading spaces.
-    // However, when printing the previous line, if they differ
-    // in indentation I want to show that somehow.
-    // Basically, if we are like 10 scopes deep in a function,
-    // I want to only print indentation 1 level deeper or shallower
-    // than the current line, so that when printing diagnostics we
-    // don't end up printing like 50 spaces.
-
-    // Display the previous line if it exists.
-    
-    if (token.line > 0) {
-        sb_print(&sb, TAB CYN SV_Fmt "\n" RESET, SV_Arg(parser->lines[token.line-1]));
-    } else {
-        // TODO: I kinda want to print the next line.
-    }
-
-    // Highlight the token in red.
-
-    String_View line = parser->lines[token.line];
-
-    sb_print(&sb, TAB CYN SV_Fmt, token.c0, line.data);
-    sb_print(&sb,     RED SV_Fmt, token.c1 - token.c0, line.data + token.c0);
-    sb_print(&sb,     CYN SV_Fmt, (int)line.count - token.c0 - 1, line.data + token.c1);
-
-    sb_append_cstr(&sb, "\n\n" RESET);
-
-    // Finally, print the string builder to stderr and exit.
-
-    context_arena = previous_arena;
-
-    fprintf(stderr, SV_Fmt, SV_Arg(sb));
-    exit(1);
-
-    va_end(args);
-}
-
 // TODO: We should probably support at least UTF-8 at some point.
-// TODO: We literally only support comments where '#' is the first character of the line.

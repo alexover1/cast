@@ -1,7 +1,7 @@
 #include <stdio.h>
 
 #include "common.h"
-#include "lexer.h"
+#include "token.h"
 #include "ast.h"
 #include "type_info.h"
 #include "vendor/stb_ds.h"

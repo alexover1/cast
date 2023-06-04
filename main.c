@@ -6,7 +6,6 @@
 #include "vendor/arena.h"
 #include "vendor/stb_ds.h"
 #include "ast.h"
-#include "lexer.h"
 #include "parser.h"
 #include "interp.h"
 
@@ -52,6 +51,7 @@ int main(int argc, char **argv)
     while (1) {
         Token token = eat_next_token(&parser);
         printf("%s\n", token_type_to_string(token.type));
+        if (token.type == TOKEN_NUMBER) parser_report_error(&parser, token, "OH NO");
         if (token.type == TOKEN_END_OF_INPUT) break;
     }
 
