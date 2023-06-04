@@ -16,29 +16,31 @@
 #endif // _WIN32
 
 #include "common.h"
-#include "lexer.h"
+#include "parser.h"
 #include "string_builder.h"
 #include "vendor/stb_ds.h"
 
-#define lexer_current_character_index(lexer) ((lexer)->current_line.data - (lexer)->current_line_start)
-#define lexer_current_line_is_empty(lexer) ((lexer)->current_line.count == 0 || (lexer)->current_line.data[0] == '#')
+Token find_next_token(Parser *parser); // @Interal
+void parser_next_line(Parser *parser); // @Interal
 
-static inline int lexer_peek_character(Lexer *lexer)
+#define parser_current_character_index(parser) ((parser)->current_line.data - (parser)->current_line_start)
+
+static inline int peek_character(Parser *parser)
 {
-    if (lexer->current_line.count) return (int) *lexer->current_line.data;
+    if (parser->current_line.count) return (int) *parser->current_line.data;
     return -1;
 }
 
-static inline int lexer_eat_character(Lexer *lexer)
+static inline int eat_character(Parser *parser)
 {
-    assert(lexer->current_line.count > 0);
-    int character = (int) *lexer->current_line.data;
-    lexer->current_line.data += 1;
-    lexer->current_line.count -= 1;
+    assert(parser->current_line.count > 0);
+    int character = (int) *parser->current_line.data;
+    parser->current_line.data += 1;
+    parser->current_line.count -= 1;
     return character;
 }
 
-static inline bool isident(char x)
+static inline bool continues_identifier(char x)
 {
     return isalnum(x) || x == '_';
 }
@@ -54,21 +56,30 @@ static bool parse_int_value(String_View s, unsigned int base, uint64_t *out)
     return i == s.count;
 }
 
-static inline void lexer_parse_maybe_equals_token(Lexer *lexer, Token *token, Token_Type type_with_equals)
+static inline void parse_maybe_equals_token(Parser *parser, Token *token, Token_Type type_with_equals)
 {
-    if (lexer_peek_character(lexer) == '=') {
-        lexer_eat_character(lexer);
+    if (peek_character(parser) == '=') {
+        eat_character(parser);
         token->c1 += 1;
         token->type = type_with_equals;
     }
+}
+
+inline void parser_next_line(Parser *parser)
+{
+    parser->current_line = sv_chop_by_delim(&parser->current_input, '\n');
+    parser->current_line = sv_trim_left(parser->current_line); // TODO: if we want to preserve indentation this must be called after arrput.
+    parser->current_line_start = parser->current_line.data;
+    parser->current_line_number += 1;
+    arrput(parser->lines, parser->current_line);
 }
 
 #define c_to_sv(cstr_lit) sv_from_parts((cstr_lit), sizeof(cstr_lit)-1)
 
 static Token_Type parse_keyword_or_ident_token_type(String_View s)
 {
-    if (sv_eq(s, c_to_sv("if"))) return TOKEN_KEYWORD_IF;
-    if (sv_eq(s, c_to_sv("then"))) return TOKEN_KEYWORD_THEN;
+    if (sv_eq(s, SV("if"))) return TOKEN_KEYWORD_IF;
+    if (sv_eq(s, SV("then"))) return TOKEN_KEYWORD_THEN;
     if (sv_eq(s, c_to_sv("else"))) return TOKEN_KEYWORD_ELSE;
     if (sv_eq(s, c_to_sv("return"))) return TOKEN_KEYWORD_RETURN;
     if (sv_eq(s, c_to_sv("struct"))) return TOKEN_KEYWORD_STRUCT;
@@ -87,6 +98,128 @@ static Token_Type parse_keyword_or_ident_token_type(String_View s)
     if (sv_eq(s, c_to_sv("false"))) return TOKEN_KEYWORD_FALSE;
     if (sv_eq(s, c_to_sv("union"))) return TOKEN_KEYWORD_UNION;
     return TOKEN_IDENT;
+}
+
+Token find_next_token(Parser *parser)
+{
+    parser->current_line = sv_trim_left(parser->current_line);
+
+    // Find next non-empty line.
+
+    while (parser->current_line.count == 0 && parser->current_input.count > 0) {
+        parser_next_line(parser); 
+    }
+
+    Token token;
+    token.type = TOKEN_END_OF_INPUT;
+    token.line = parser->current_line_number;
+    token.c0 = parser_current_character_index(parser);
+    token.c1 = token.c0 + 1;
+
+    if (parser->current_line.count == 0) return token;
+
+    int c = peek_character(parser);
+
+    if (isalnum(c)) {
+        String_View literal = sv_chop_left_while(&parser->current_line, continues_identifier);
+        token.c1 = parser_current_character_index(parser);
+
+        if (isdigit(c)) {
+            token.number_flags = 0;
+            bool ok = parse_int_value(literal, 10, &token.int_value);
+            token.type = ok ? TOKEN_NUMBER : TOKEN_ERROR;
+            return token;
+        }
+
+        token.type = parse_keyword_or_ident_token_type(literal);
+        if (token.type == TOKEN_IDENT) {
+            token.string_value = literal;
+        }
+        return token;
+    }
+
+    token.type = eat_character(parser);
+
+    switch (token.type) {
+    case '-': {
+        int d = peek_character(parser);
+        if (d == '=') {
+            eat_character(parser); token.c1 += 1;
+            token.type = TOKEN_MINUSEQUALS;
+        } else if (d == '>') {
+            eat_character(parser); token.c1 += 1;
+            token.type = TOKEN_RIGHT_ARROW;
+        }
+    } break;
+    case '+': parse_maybe_equals_token(parser, &token, TOKEN_PLUSEQUALS); break;
+    case '*': parse_maybe_equals_token(parser, &token, TOKEN_TIMESEQUALS); break;
+    case '/': parse_maybe_equals_token(parser, &token, TOKEN_DIVEQUALS); break;
+    case '%': parse_maybe_equals_token(parser, &token, TOKEN_MODEQUALS); break;
+    case '=': parse_maybe_equals_token(parser, &token, TOKEN_ISEQUAL); break;
+    case '!': parse_maybe_equals_token(parser, &token, TOKEN_ISNOTEQUAL); break;
+    case '&': {
+        int d = peek_character(parser);
+        if (d == '&') {
+            eat_character(parser); token.c1 += 1;
+            token.type = TOKEN_LOGICAL_AND;
+        } else if (d == '=') {
+            eat_character(parser); token.c1 += 1;
+            token.type = TOKEN_BITWISE_AND_EQUALS;
+        }
+    } break;
+    case '|': {
+        int d = peek_character(parser);
+        if (d == '|') {
+            eat_character(parser); token.c1 += 1;
+            token.type = TOKEN_LOGICAL_OR;
+        } else if (d == '=') {
+            eat_character(parser); token.c1 += 1;
+            token.type = TOKEN_BITWISE_OR_EQUALS;
+        }
+    } break;
+    case '^': parse_maybe_equals_token(parser, &token, TOKEN_BITWISE_XOR_EQUALS); break;
+    case '<': {
+        int d = peek_character(parser);
+        if (d == '<') {
+            eat_character(parser); token.c1 += 1;
+            token.type = TOKEN_POINTER_DEREFERENCE_OR_SHIFT_LEFT;
+        } else if (d == '=') {
+            eat_character(parser); token.c1 += 1;
+            token.type = TOKEN_LESSEQUALS;
+        }
+    } break;
+    case '>': {
+        int d = peek_character(parser);
+        if (d == '>') {
+            eat_character(parser); token.c1 += 1;
+            token.type = TOKEN_SHIFT_RIGHT;
+        } else if (d == '=') {
+            eat_character(parser); token.c1 += 1;
+            token.type = TOKEN_GREATEREQUALS;
+        }
+    } break;
+    case '.':
+        if (peek_character(parser) == '.') {
+            eat_character(parser); token.c1 += 1;
+            token.type = TOKEN_DOUBLE_DOT;
+        }
+        break;
+    case '(':
+    case ')':
+    case '[':
+    case ']':
+    case '{':
+    case '}':
+    case ',':
+    case ':':
+    case ';':
+    case '~':
+        break;
+    default:
+        token.type = TOKEN_ERROR;
+    }
+
+    return token;
 }
 
 static bool is_path_sep(char x)
@@ -160,152 +293,21 @@ bool path_file_exist(const char *file_path)
 #endif
 }
 
-Token lexer_eat_token(Lexer *lexer)
+inline Token peek_next_token(Parser *parser)
 {
-    lexer->current_line = sv_trim_left(lexer->current_line);
-
-    // Find next non-empty line.
-
-    while (lexer_current_line_is_empty(lexer) && lexer->current_input.count > 0) {
-        lexer_next_line(lexer); 
-    }
-
-    Token token;
-    token.type = TOKEN_END_OF_INPUT;
-    token.line = lexer->current_line_number;
-    token.c0 = lexer_current_character_index(lexer);
-    token.c1 = token.c0 + 1;
-
-    if (lexer_current_line_is_empty(lexer)) return token;
-
-    int c = lexer_peek_character(lexer);
-
-    if (isalnum(c)) {
-        String_View literal = sv_chop_left_while(&lexer->current_line, isident);
-        token.c1 = lexer_current_character_index(lexer);
-
-        if (isdigit(c)) {
-            token.number_flags = 0;
-            bool ok = parse_int_value(literal, 10, &token.int_value);
-            token.type = ok ? TOKEN_NUMBER : TOKEN_ERROR;
-            return token;
-        }
-
-        token.type = parse_keyword_or_ident_token_type(literal);
-        if (token.type == TOKEN_IDENT) {
-            token.string_value = literal;
-        }
-        return token;
-    }
-
-    token.type = lexer_eat_character(lexer);
-
-    switch (token.type) {
-    case '-': {
-        int d = lexer_peek_character(lexer);
-        if (d == '=') {
-            lexer_eat_character(lexer); token.c1 += 1;
-            token.type = TOKEN_MINUSEQUALS;
-        } else if (d == '>') {
-            lexer_eat_character(lexer); token.c1 += 1;
-            token.type = TOKEN_RIGHT_ARROW;
-        }
-    } break;
-    case '+': lexer_parse_maybe_equals_token(lexer, &token, TOKEN_PLUSEQUALS); break;
-    case '*': lexer_parse_maybe_equals_token(lexer, &token, TOKEN_TIMESEQUALS); break;
-    case '/': lexer_parse_maybe_equals_token(lexer, &token, TOKEN_DIVEQUALS); break;
-    case '%': lexer_parse_maybe_equals_token(lexer, &token, TOKEN_MODEQUALS); break;
-    case '=': lexer_parse_maybe_equals_token(lexer, &token, TOKEN_ISEQUAL); break;
-    case '!': lexer_parse_maybe_equals_token(lexer, &token, TOKEN_ISNOTEQUAL); break;
-    case '&': {
-        int d = lexer_peek_character(lexer);
-        if (d == '&') {
-            lexer_eat_character(lexer); token.c1 += 1;
-            token.type = TOKEN_LOGICAL_AND;
-        } else if (d == '=') {
-            lexer_eat_character(lexer); token.c1 += 1;
-            token.type = TOKEN_BITWISE_AND_EQUALS;
-        }
-    } break;
-    case '|': {
-        int d = lexer_peek_character(lexer);
-        if (d == '|') {
-            lexer_eat_character(lexer); token.c1 += 1;
-            token.type = TOKEN_LOGICAL_OR;
-        } else if (d == '=') {
-            lexer_eat_character(lexer); token.c1 += 1;
-            token.type = TOKEN_BITWISE_OR_EQUALS;
-        }
-    } break;
-    case '^': lexer_parse_maybe_equals_token(lexer, &token, TOKEN_BITWISE_XOR_EQUALS); break;
-    case '<': {
-        int d = lexer_peek_character(lexer);
-        if (d == '<') {
-            lexer_eat_character(lexer); token.c1 += 1;
-            token.type = TOKEN_POINTER_DEREFERENCE_OR_SHIFT_LEFT;
-        } else if (d == '=') {
-            lexer_eat_character(lexer); token.c1 += 1;
-            token.type = TOKEN_LESSEQUALS;
-        }
-    } break;
-    case '>': {
-        int d = lexer_peek_character(lexer);
-        if (d == '>') {
-            lexer_eat_character(lexer); token.c1 += 1;
-            token.type = TOKEN_SHIFT_RIGHT;
-        } else if (d == '=') {
-            lexer_eat_character(lexer); token.c1 += 1;
-            token.type = TOKEN_GREATEREQUALS;
-        }
-    } break;
-    case '.':
-        if (lexer_peek_character(lexer) == '.') {
-            lexer_eat_character(lexer); token.c1 += 1;
-            token.type = TOKEN_DOUBLE_DOT;
-        }
-        break;
-    case '(':
-    case ')':
-    case '[':
-    case ']':
-    case '{':
-    case '}':
-    case ',':
-    case ':':
-    case ';':
-    case '~':
-        break;
-    default:
-        token.type = TOKEN_ERROR;
-    }
-
-    return token;
+    if (parser->peek_full) return parser->peek_token;
+    parser->peek_token = find_next_token(parser);
+    parser->peek_full = true;
+    return parser->peek_token;
 }
 
-inline void lexer_next_line(Lexer *lexer)
+inline Token eat_next_token(Parser *parser)
 {
-    lexer->current_line = sv_chop_by_delim(&lexer->current_input, '\n');
-    lexer->current_line = sv_trim_left(lexer->current_line); // TODO: if we want to preserve indentation this must be called after arrput.
-    lexer->current_line_start = lexer->current_line.data;
-    lexer->current_line_number += 1;
-    arrput(lexer->lines, lexer->current_line);
-}
-
-inline Token lexer_peek_token(Lexer *lexer)
-{
-    if (lexer->peek_full) return lexer->peek_token;
-    lexer->peek_token = lexer_eat_token(lexer);
-    lexer->peek_full = true;
-    return lexer->peek_token;
-}
-
-inline Token lexer_next_token(Lexer *lexer)
-{
-    if (lexer->peek_full) {
-        lexer->peek_full = false;
-        return lexer->peek_token;
+    if (parser->peek_full) {
+        parser->peek_full = false;
+        return parser->peek_token;
     }
-    return lexer_eat_token(lexer);
+    return find_next_token(parser);
 }
 
 #define RED   "\x1B[31m"
@@ -318,18 +320,18 @@ inline Token lexer_next_token(Lexer *lexer)
 #define RESET "\x1B[0m"
 #define TAB   "    "
 
-void lexer_report_error(const Lexer *lexer, Token token, const char *fmt, ...)
+void parser_report_error(Parser *parser, Token token, const char *format, ...)
 {
     if (token.line == 0) {
         // Default location if null token is passed.
-        token.line = lexer->current_line_number;
-        token.c0 = lexer_current_character_index(lexer);
+        token.line = parser->current_line_number;
+        token.c0 = parser_current_character_index(parser);
         token.c1 = token.c0 + 1;
     }
 
     va_list args;
-    va_start(args, fmt);
-    const char *msg = vtprint(fmt, args);
+    va_start(args, format);
+    const char *msg = vtprint(format, args);
     assert(msg);
 
     // Setup the allocator and init string builder.
@@ -340,12 +342,12 @@ void lexer_report_error(const Lexer *lexer, Token token, const char *fmt, ...)
     String_Builder sb = {0};
 
     // Display the error message.
-    sb_print(&sb, Loc_Fmt": Error: %s\n", SV_Arg(lexer->path_name), token.line + 1, token.c0 + 1, msg);
+    sb_print(&sb, Loc_Fmt": Error: %s\n", SV_Arg(parser->path_name), token.line + 1, token.c0 + 1, msg);
 
     sb_append(&sb, "\n", 1);
 
     // TODO: I want to "normalize" the indentation.
-    // When we add lines to the lexer, we can add it
+    // When we add lines to the parser, we can add it
     // after it has been trimmed to remove leading spaces.
     // However, when printing the previous line, if they differ
     // in indentation I want to show that somehow.
@@ -357,14 +359,14 @@ void lexer_report_error(const Lexer *lexer, Token token, const char *fmt, ...)
     // Display the previous line if it exists.
     
     if (token.line > 0) {
-        sb_print(&sb, TAB CYN SV_Fmt "\n" RESET, SV_Arg(lexer->lines[token.line-1]));
+        sb_print(&sb, TAB CYN SV_Fmt "\n" RESET, SV_Arg(parser->lines[token.line-1]));
     } else {
         // TODO: I kinda want to print the next line.
     }
 
     // Highlight the token in red.
 
-    String_View line = lexer->lines[token.line];
+    String_View line = parser->lines[token.line];
 
     sb_print(&sb, TAB CYN SV_Fmt, token.c0, line.data);
     sb_print(&sb,     RED SV_Fmt, token.c1 - token.c0, line.data + token.c0);
@@ -380,23 +382,6 @@ void lexer_report_error(const Lexer *lexer, Token token, const char *fmt, ...)
     exit(1);
 
     va_end(args);
-}
-
-inline void lexer_init(Lexer *l, String_View input)
-{
-    assert(input.data != NULL);
-    
-    l->file_name = SV_NULL;
-    l->path_name = SV_NULL;
-    l->lines = NULL;
-
-    l->current_input = input;
-    l->current_line = SV_NULL;
-    l->current_line_start = NULL;
-    l->current_line_number = -1;
-
-    // l->peek_token can stay uninitialized as we should never read from it directly
-    l->peek_full = false;
 }
 
 // TODO: We should probably support at least UTF-8 at some point.

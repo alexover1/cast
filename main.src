@@ -1,6 +1,1 @@
-x * 2
-
-while true {
-	if x == 0 return 5;
-	break;
-}
+N :: 10

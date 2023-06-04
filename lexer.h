@@ -89,37 +89,3 @@ enum {
     // NUMBER_IS_OCTAL_LITERAL = 0x4,
     NUMBER_IS_FLOAT = 0x8, // TODO: Not sure about how we want int/float to work...
 };
-
-typedef struct {
-    String_View file_name;
-    String_View path_name;
-    String_View *lines; // @malloced with stb_ds
-
-    String_View current_input;
-    String_View current_line;
-    const char *current_line_start;
-    int current_line_number;
-
-    Token peek_token;
-    bool peek_full;
-    // Token eof_token;
-} Lexer;
-
-void lexer_init(Lexer *l, String_View contents);
-
-void lexer_next_line(Lexer *lexer);
-Token lexer_peek_token(Lexer *lexer);
-Token lexer_next_token(Lexer *lexer);
-
-#ifndef _WIN32
-#define Loc_Fmt SV_Fmt":%d:%d"
-#else
-#define Loc_Fmt SV_Fmt"%s:%d,%d"
-#endif
-
-void lexer_report_error(const Lexer *lexer, Token token, const char *fmt, ...);
-
-// File and path-related functions:
-
-String_View path_get_file_name(const char *begin);
-bool path_file_exist(const char *file_path);

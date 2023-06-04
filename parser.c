@@ -64,11 +64,11 @@ static int operator_precedence_from_token_type(int type)
     }
 }
 
-static inline void eat_semicolon(Lexer *lexer)
+static inline void eat_semicolon(Parser *parser)
 {
-    Token token = lexer_next_token(lexer);
+    Token token = eat_next_token(parser);
     if (token.type != ';') {
-        lexer_report_error(lexer, token, "Expected semicolon after statement.");
+        parser_report_error(parser, token, "Expected semicolon after statement.");
     }
 }
 
@@ -80,12 +80,12 @@ Ast *parse_binary_expression(Parser *p, Ast *left, int precedence)
     Ast_Binary_Operator *bin;
 
     while (true) {
-        token = lexer_peek_token(&p->lexer);
+        token = peek_next_token(p);
         int token_precedence = operator_precedence_from_token_type(token.type);
         if (token_precedence < precedence) {
             return left;
         }
-        lexer_next_token(&p->lexer);
+        eat_next_token(p);
         bin = ast_alloc(p, token, AST_BINARY_OPERATOR, sizeof(Ast_Binary_Operator));
         bin->left = left;
         bin->operator_type = token.type;
@@ -98,7 +98,7 @@ Ast *parse_binary_expression(Parser *p, Ast *left, int precedence)
 
 Ast *parse_unary_expression(Parser *p)
 {
-    Token token = lexer_peek_token(&p->lexer);
+    Token token = peek_next_token(p);
     switch (token.type) {
     case '-':
     case '*':
@@ -107,7 +107,7 @@ Ast *parse_unary_expression(Parser *p)
     case TOKEN_BITWISE_XOR:
     case TOKEN_POINTER_DEREFERENCE_OR_SHIFT_LEFT:
     {
-        lexer_next_token(&p->lexer);
+        eat_next_token(p);
         Ast_Unary_Operator *unary = ast_alloc(p, token, AST_UNARY_OPERATOR, sizeof(Ast_Unary_Operator));
         unary->operator_type = token.type;
         unary->subexpression = parse_unary_expression(p);
@@ -123,7 +123,7 @@ Ast *parse_primary_expression(Parser *p, Ast *base)
     if (base == NULL) base = parse_base_expression(p);
 
     while (true) {
-        Token token = lexer_peek_token(&p->lexer);
+        Token token = peek_next_token(p);
         switch (token.type) {
         case '.': // TODO: selector
         case '[': // TODO: array subscript
@@ -139,7 +139,7 @@ Ast *parse_primary_expression(Parser *p, Ast *base)
 
 Ast *parse_base_expression(Parser *p)
 {
-    Token token = lexer_next_token(&p->lexer);
+    Token token = eat_next_token(p);
     switch (token.type) {
     case TOKEN_IDENT:
         return xx make_identifier(p, token);
@@ -182,9 +182,9 @@ Ast *parse_base_expression(Parser *p)
         // TODO: check for procedure type/defn here.
         // TODO: print the location of the open paren and the place where we expected a closing one.
         Ast *subexpression = parse_expression(p);
-        Token next_token = lexer_next_token(&p->lexer);
+        Token next_token = eat_next_token(p);
         if (next_token.type != ')') {
-            lexer_report_error(&p->lexer, token, "Missing closing parentheses around expression.");
+            parser_report_error(p, token, "Missing closing parentheses around expression.");
         }
         return subexpression;
     }
@@ -194,13 +194,13 @@ Ast *parse_base_expression(Parser *p)
         UNIMPLEMENTED;
     }
 
-    lexer_report_error(&p->lexer, token, "Expected a base expression (operand) but got %s", token_type_to_string(token.type));
+    parser_report_error(p, token, "Expected a base expression (operand) but got %s", token_type_to_string(token.type));
     UNREACHABLE;
 }
 
 Ast *parse_if_statement(Parser *p)
 {
-    Token token = lexer_next_token(&p->lexer);
+    Token token = eat_next_token(p);
     assert(token.type == TOKEN_KEYWORD_IF);
 
     Ast_If *if_stmt = ast_alloc(p, token, AST_IF, sizeof(Ast_If));
@@ -208,16 +208,16 @@ Ast *parse_if_statement(Parser *p)
     if_stmt->condition_expression = parse_expression(p);
 
     // Check for "then" keyword and consume it.
-    token = lexer_peek_token(&p->lexer);
+    token = peek_next_token(p);
     if (token.type == TOKEN_KEYWORD_THEN) {
-        lexer_next_token(&p->lexer);
+        eat_next_token(p);
     }
     if_stmt->then_statement = parse_statement(p);
 
     // Check for "else" keyword and consume it.
-    token = lexer_peek_token(&p->lexer);
+    token = peek_next_token(p);
     if (token.type == TOKEN_KEYWORD_ELSE) {
-        lexer_next_token(&p->lexer);
+        eat_next_token(p);
         if_stmt->else_statement = parse_statement(p);
     }
 
@@ -226,21 +226,21 @@ Ast *parse_if_statement(Parser *p)
 
 Ast_Block *parse_block(Parser *p)
 {
-    Token token = lexer_next_token(&p->lexer);
+    Token token = eat_next_token(p);
     assert(token.type == '{');
 
     Ast_Block *block = ast_alloc(p, token, AST_BLOCK, sizeof(Ast_Block));
 
     while (true) {
-        token = lexer_peek_token(&p->lexer);
+        token = peek_next_token(p);
         if (token.type == '}') {
-            lexer_next_token(&p->lexer);
+            eat_next_token(p);
             return block;
         }
 
         Ast *stmt = parse_statement(p);
         arrput(block->statements, stmt);
-        if (stmt->type != AST_BLOCK) eat_semicolon(&p->lexer); // TODO: This doesn't handle all cases of curly braces.
+        if (stmt->type != AST_BLOCK) eat_semicolon(p); // TODO: This doesn't handle all cases of curly braces.
     }
 
     UNREACHABLE;
@@ -248,10 +248,10 @@ Ast_Block *parse_block(Parser *p)
 
 Ast *parse_statement(Parser *p)
 {
-    Token token = lexer_peek_token(&p->lexer);
+    Token token = peek_next_token(p);
     switch (token.type) {
     case TOKEN_KEYWORD_RETURN: {
-        lexer_next_token(&p->lexer);        
+        eat_next_token(p);        
         Ast_Return *ret = ast_alloc(p, token, AST_RETURN, sizeof(Ast_Return));
         ret->subexpression = parse_expression(p);
         return xx ret;
@@ -261,16 +261,16 @@ Ast *parse_statement(Parser *p)
         return parse_if_statement(p);
 
     case TOKEN_KEYWORD_WHILE: {
-        lexer_next_token(&p->lexer);
+        eat_next_token(p);
         Ast_While *while_stmt = ast_alloc(p, token, AST_WHILE, sizeof(Ast_While));
 
         while_stmt->condition_expression = parse_expression(p);
 
         // Check for "then" keyword and consume it.
         // TODO: do we want/need this?
-        token = lexer_peek_token(&p->lexer);
+        token = peek_next_token(p);
         if (token.type == TOKEN_KEYWORD_THEN) {
-            lexer_next_token(&p->lexer);
+            eat_next_token(p);
         }
         while_stmt->then_statement = parse_statement(p);
 
@@ -280,7 +280,7 @@ Ast *parse_statement(Parser *p)
     case TOKEN_KEYWORD_BREAK:
     case TOKEN_KEYWORD_CONTINUE:
     {
-        lexer_next_token(&p->lexer);
+        eat_next_token(p);
         Ast_Loop_Control *loop_control = ast_alloc(p, token, AST_LOOP_CONTROL, sizeof(Ast_Loop_Control));
         loop_control->keyword_type = token.type;
         // TODO: We want to parse an expression/identifier here for labeled break/continue statements.
@@ -306,6 +306,25 @@ Ast *parse_statement(Parser *p)
 inline Ast *parse_expression(Parser *p)
 {
     return parse_binary_expression(p, NULL, 1);
+}
+
+inline void parser_init(Parser *parser, String_View input, String_View file_name, String_View path_name)
+{
+    assert(input.data != NULL);
+    
+    parser->file_name = file_name;
+    parser->path_name = path_name;
+    parser->lines = NULL;
+
+    parser->current_input = input;
+    parser->current_line = SV_NULL;
+    parser->current_line_start = NULL;
+    parser->current_line_number = -1;
+
+    // l->peek_token can stay uninitialized as we should never read from it directly
+    parser->peek_full = false;
+
+    parser->block = NULL;
 }
 
 // TODO: Function calls
