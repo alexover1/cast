@@ -60,6 +60,10 @@ int main(int argc, char **argv)
         printf("%s\n", ast_to_string(block->statements[it]));
     }
 
+    Interp interp = init_interp();
+    interp_add_scope(&interp, block);
+    interp_run_main_loop(&interp);
+
     arena_free(&temporary_arena);
     return 0;
 }

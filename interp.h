@@ -12,7 +12,7 @@ typedef struct Object Object;
 
 typedef struct {
     Object *objects;
-    Object **queue;
+    ptrdiff_t *queue;
     // Type_Table_Entry *type_table;
     Type_Table type_table;
 } Interp;

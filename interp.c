@@ -107,7 +107,7 @@ Type interp_get_type(Interp *interp, const Ast_Type_Definition *defn)
 
     if (defn->type_name) {
         Type type = parse_literal_type(&interp->type_table, defn->type_name->name);
-        if (type) return type;
+        if (type != NULL) return type;
         
         const Ast_Declaration *decl = find_declaration_or_null(defn->type_name);
         if (!decl) {
@@ -149,7 +149,10 @@ void interp_add_scope(Interp *interp, const Ast_Block *block)
     For (block->statements) {
         // Adding objects in a depth-first order.
         
-        if (block->statements[it]->type == AST_BLOCK) interp_add_scope(interp, xx block->statements[it]);
+        if (block->statements[it]->type == AST_BLOCK) {
+            interp_add_scope(interp, xx block->statements[it]);
+            continue;
+        }
 
         // We only care about declarations.
         
@@ -163,8 +166,7 @@ void interp_add_scope(Interp *interp, const Ast_Block *block)
             const Ast_Type_Definition *defn = xx decl->expression;
             if (defn->struct_desc) interp_add_scope(interp, defn->struct_desc->block);
             if (defn->enum_defn)   interp_add_scope(interp, defn->enum_defn->block);
-        }
-        else if (decl->expression->type == AST_LAMBDA) {
+        } else if (decl->expression->type == AST_LAMBDA) {
             const Ast_Lambda *lambda = xx decl->expression;
             interp_add_scope(interp, &lambda->body.block);
         }
@@ -172,7 +174,7 @@ void interp_add_scope(Interp *interp, const Ast_Block *block)
         Object object = init_object(decl);
         ptrdiff_t i = hmlen(interp->objects);
         hmputs(interp->objects, object);
-        arrput(interp->queue, &interp->objects[i]);
+        arrput(interp->queue, i);
     }
 }
 
@@ -181,9 +183,10 @@ void interp_run_main_loop(Interp *interp)
     while (arrlenu(interp->queue)) {
         size_t i = 0;
         while (i < arrlenu(interp->queue)) {
-            infer_object(interp, interp->queue[i]);
+            Object *object = &interp->objects[interp->queue[i]];
+            infer_object(interp, object);
 
-            if (interp->queue[i]->inferred_type) {
+            if (object->inferred_type) {
                 arrdelswap(interp->queue, i);
             } else {
                 i += 1;
@@ -196,6 +199,7 @@ Interp init_interp(void)
 {
     Interp interp;
     interp.objects = NULL;
+    interp.queue = NULL;
     interp.type_table = type_table_init();
     return interp;
 }
