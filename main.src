@@ -1,1 +1,9 @@
-N :: 10
+Vector3 :: struct {
+	x: int;
+	y: int;
+	z: int;
+};
+
+if OS == WINDOWS {
+	Window_Type :: s64;
+}

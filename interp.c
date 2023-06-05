@@ -6,6 +6,8 @@
 
 #define INTERP_DO_TRACING
 
+#define xx (void*)
+
 static void infer_object(Interp *interp, Object *object)
 {
     if (object->inferred_type != NULL) return;
@@ -17,7 +19,7 @@ static void infer_object(Interp *interp, Object *object)
     // unlike type definitions that always result in type 'Type.'
 
     if (ast->type == AST_TYPE_INSTANTIATION) {
-        const Ast_Type_Instantiation *inst = Down(ast);
+        const Ast_Type_Instantiation *inst = xx ast;
         assert(inst->type_definition);
 
         // This still might return NULL.
@@ -28,7 +30,7 @@ static void infer_object(Interp *interp, Object *object)
     // Type definitions must add a type into the type table.
 
     if (ast->type == AST_TYPE_DEFINITION) {
-        const Ast_Type_Definition *defn = Down(ast);
+        const Ast_Type_Definition *defn = xx ast;
 
         object->type_value = interp_get_type(interp, defn);
 
@@ -37,7 +39,7 @@ static void infer_object(Interp *interp, Object *object)
             object->inferred_type = interp->type_table.TYPE;
 
             #if defined(INTERP_DO_TRACING)
-                printf("[defn] %s :: %s\n", decl->ident.name, type_to_string(&interp->type_table, object->type_value));
+                printf("[defn] "SV_Fmt" :: %s\n", SV_Arg(decl->ident->name), type_to_string(&interp->type_table, object->type_value));
             #endif
         } 
 
@@ -58,14 +60,14 @@ static void infer_object(Interp *interp, Object *object)
 Type interp_get_type(Interp *interp, const Ast_Type_Definition *defn)
 {
     if (defn->struct_desc) {
-        const Ast_Block *block = &defn->struct_desc->scope;
+        const Ast_Block *block = defn->struct_desc->block;
 
         ptrdiff_t *children = NULL;
 
         For (block->statements) {
             if (block->statements[it]->type != AST_DECLARATION) continue;
 
-            const Ast_Declaration *decl = Down(block->statements[it]);            
+            const Ast_Declaration *decl = xx block->statements[it]; 
 
             if (decl->flags & DECLARATION_IS_COMPTIME) continue; // Skip comptime.
             
@@ -92,7 +94,7 @@ Type interp_get_type(Interp *interp, const Ast_Type_Definition *defn)
             Object *object = &interp->objects[children[it]];
             Type_Info_Struct_Field *field = struct_type.field_data + it;
             field->type = object->inferred_type;
-            field->name = object->key->ident.name;
+            field->name = arena_sv_to_cstr(&interp->type_table.arena, object->key->ident->name);
             field->offset = -1;
         }
 
@@ -103,21 +105,21 @@ Type interp_get_type(Interp *interp, const Ast_Type_Definition *defn)
         UNIMPLEMENTED;
     }
 
-    if (defn->literal_name) {
-        return parse_literal_type(&interp->type_table, defn->literal_name, strlen(defn->literal_name)); // TODO: store literal_name sized
-    }
-
     if (defn->type_name) {
+        Type type = parse_literal_type(&interp->type_table, defn->type_name->name);
+        if (type) return type;
+        
         const Ast_Declaration *decl = find_declaration_or_null(defn->type_name);
         if (!decl) {
-            fprintf(stderr, "error: Undeclared identifier '%s'\n", defn->type_name->name);
+            fprintf(stderr, "error: Undeclared identifier '"SV_Fmt"'\n", SV_Arg(defn->type_name->name));
             exit(1);
         }
         Object *object = hmgetp_null(interp->objects, decl);
         assert(object);
         if (object->inferred_type == NULL) return NULL; // We must wait on this.
         if (object->inferred_type != interp->type_table.TYPE) {
-            fprintf(stderr, "error: '%s' is not a type\n", ast_to_string(Down(decl->expression)));
+            // TODO: just print the name of the object and what type it actually is.
+            fprintf(stderr, "error: '%s' is not a type\n", ast_to_string(xx decl->expression));
             exit(1);
         }
         return object->type_value;
@@ -129,6 +131,10 @@ Type interp_get_type(Interp *interp, const Ast_Type_Definition *defn)
 
     if (defn->pointer_to) {
         UNIMPLEMENTED;       
+    }
+
+    if (defn->struct_call) {
+        UNIMPLEMENTED;
     }
 
     if (defn->lambda_argument_types && defn->lambda_return_type) {
@@ -143,23 +149,23 @@ void interp_add_scope(Interp *interp, const Ast_Block *block)
     For (block->statements) {
         // Adding objects in a depth-first order.
         
-        if (block->statements[it]->type == AST_BLOCK) interp_add_scope(interp, Down(block->statements[it]));
+        if (block->statements[it]->type == AST_BLOCK) interp_add_scope(interp, xx block->statements[it]);
 
         // We only care about declarations.
         
         if (block->statements[it]->type != AST_DECLARATION) continue;
 
-        const Ast_Declaration *decl = Down(block->statements[it]);
+        const Ast_Declaration *decl = xx block->statements[it];
 
         // Add inner scopes.
 
         if (decl->expression->type == AST_TYPE_DEFINITION) {
-            const Ast_Type_Definition *defn = Down(decl->expression);
-            if (defn->struct_desc) interp_add_scope(interp, &defn->struct_desc->scope);
-            if (defn->enum_defn)   interp_add_scope(interp, &defn->enum_defn->scope);
+            const Ast_Type_Definition *defn = xx decl->expression;
+            if (defn->struct_desc) interp_add_scope(interp, defn->struct_desc->block);
+            if (defn->enum_defn)   interp_add_scope(interp, defn->enum_defn->block);
         }
         else if (decl->expression->type == AST_LAMBDA) {
-            const Ast_Lambda *lambda = Down(decl->expression);
+            const Ast_Lambda *lambda = xx decl->expression;
             interp_add_scope(interp, &lambda->body.block);
         }
         

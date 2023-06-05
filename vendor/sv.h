@@ -67,6 +67,7 @@ SVDEF String_View sv_chop_right(String_View *sv, size_t n);
 SVDEF String_View sv_chop_left_while(String_View *sv, bool (*predicate)(char x));
 SVDEF bool sv_index_of(String_View sv, char c, size_t *index);
 SVDEF bool sv_eq(String_View a, String_View b);
+SVDEF bool sv_eq2(String_View a, String_View b); // Doesn't length-check.
 SVDEF bool sv_eq_ignorecase(String_View a, String_View b);
 SVDEF bool sv_starts_with(String_View sv, String_View prefix);
 SVDEF bool sv_ends_with(String_View sv, String_View suffix);
@@ -253,6 +254,12 @@ SVDEF bool sv_eq(String_View a, String_View b)
     } else {
         return memcmp(a.data, b.data, a.count) == 0;
     }
+}
+
+// Doesn't length-check.
+SVDEF bool sv_eq2(String_View a, String_View b)
+{
+    return memcmp(a.data, b.data, a.count) == 0;
 }
 
 SVDEF bool sv_eq_ignorecase(String_View a, String_View b)

@@ -44,11 +44,7 @@ typedef uint64_t u64;
 #define Sign(T, x)    ((T)((x) > 0) - (T)((x) < 0))
 #define Abs(T, x)     (Sign(T, x)*(x))
 
-// C INHERITANCE CASTING
-
-// For some reason this works
-#define Down(x) (void*)(x)
-#define Base(x) (&(x)->base)
+// AUTOMATIC ITERATION
 
 #define For(xs) for (ptrdiff_t it = 0; it < arrlen((xs)); ++it)
 

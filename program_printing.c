@@ -6,6 +6,8 @@
 #include "type_info.h"
 #include "vendor/stb_ds.h"
 
+#define xx (void *)
+
 const char *type_to_string(const Type_Table *table, const Type_Info *type)
 {
     if (type == NULL) return "**NULL**";
@@ -73,12 +75,12 @@ const char *type_to_string(const Type_Table *table, const Type_Info *type)
         }
 
         case TYPE_POINTER: {
-            const Type_Info_Pointer *pointer = Down(type);
+            const Type_Info_Pointer *pointer = xx type;
             return tprint("*%s", type_to_string(table, pointer->element_type));
         }
 
         case TYPE_ARRAY: {
-            const Type_Info_Array *array = Down(type);
+            const Type_Info_Array *array = xx type;
             if (array->element_count >= 0) {
                 return tprint("[%ld]%s",
                     array->element_count,
@@ -148,7 +150,7 @@ const char *token_type_to_string(int type)
     case TOKEN_NOTE: return "note";
     case TOKEN_END_OF_INPUT: return "end of input";
 
-    case TOKEN_ERROR: return "error";
+    case TOKEN_ERROR: return "invalid token";
 
     default: return "**INVALID**";
     }
@@ -157,14 +159,12 @@ const char *token_type_to_string(int type)
 const char *ast_to_string(const Ast *ast)
 {
     if (ast == NULL) return "**NULL**";
-    
-    #define xx (const Ast *)
 
     switch (ast->type) {
         case AST_UNINITIALIZED: return "**UNINITIALIZED**";
         
         case AST_LITERAL: {
-            const Ast_Literal *lit = Down(ast);
+            const Ast_Literal *lit = xx ast;
             switch (lit->kind) {
             case LITERAL_INT:    return tprint("%llu", lit->int_value);
             case LITERAL_FLOAT:  return tprint("%f", lit->float_value);
@@ -175,10 +175,10 @@ const char *ast_to_string(const Ast *ast)
             UNREACHABLE;
         }
 
-        case AST_IDENT: return ((const Ast_Ident *)ast)->name;
+        case AST_IDENT: return tprint(SV_Fmt, SV_Arg(((const Ast_Ident *)ast)->name));
 
         case AST_BINARY_OPERATOR: {
-            const Ast_Binary_Operator *bin = Down(ast);
+            const Ast_Binary_Operator *bin = xx ast;
             return tprint("(%s %s %s)",
                 ast_to_string(bin->left),
                 token_type_to_string(bin->operator_type),
@@ -186,7 +186,7 @@ const char *ast_to_string(const Ast *ast)
         }
         
         case AST_PROCEDURE_CALL: {
-            const Ast_Procedure_Call *call = Down(ast);
+            const Ast_Procedure_Call *call = xx ast;
 
             Arena *saved = context_arena;
             context_arena = &temporary_arena;
@@ -206,17 +206,15 @@ const char *ast_to_string(const Ast *ast)
         }
 
         case AST_TYPE_DEFINITION: {
-            const Ast_Type_Definition *defn = Down(ast);
+            const Ast_Type_Definition *defn = xx ast;
 
             if (defn->struct_desc) {
-                return tprint("struct %s", ast_to_string(xx &defn->struct_desc->scope));
+                return tprint("struct %s", ast_to_string(xx defn->struct_desc->block));
             }
 
             if (defn->enum_defn) {
-                return tprint("enum %s", ast_to_string(xx &defn->enum_defn->scope));
+                return tprint("enum %s", ast_to_string(xx defn->enum_defn->block));
             }
-
-            if (defn->literal_name) return defn->literal_name;
 
             if (defn->type_name) return ast_to_string(xx defn->type_name);
 
@@ -249,13 +247,13 @@ const char *ast_to_string(const Ast *ast)
         }
 
         case AST_TYPE_INSTANTIATION: {
-            const Ast_Type_Instantiation *inst= Down(ast);
+            const Ast_Type_Instantiation *inst = xx ast;
             // TODO: print values
             return tprint("%s{}", ast_to_string(xx inst->type_definition));
         }
 
         case AST_BLOCK: {
-            const Ast_Block *block = Down(ast);
+            const Ast_Block *block = xx ast;
 
             Arena *saved = context_arena;
             context_arena = &temporary_arena;
@@ -274,7 +272,7 @@ const char *ast_to_string(const Ast *ast)
         }
 
         case AST_IF: {
-            const Ast_If *if_stmt = Down(ast);
+            const Ast_If *if_stmt = xx ast;
             if (if_stmt->else_statement != NULL) {
                 return tprint("if %s then %s else %s",
                     ast_to_string(if_stmt->condition_expression),
@@ -287,41 +285,43 @@ const char *ast_to_string(const Ast *ast)
         }
 
         case AST_WHILE: {
-            const Ast_While *while_stmt = Down(ast);
+            const Ast_While *while_stmt = xx ast;
             return tprint("while %s %s",
                 ast_to_string(while_stmt->condition_expression),
                 ast_to_string(while_stmt->then_statement));
         }
 
         case AST_LOOP_CONTROL: {
-            const Ast_Loop_Control *loop_control = Down(ast);
+            const Ast_Loop_Control *loop_control = xx ast;
             return token_type_to_string(loop_control->keyword_type);
         }
 
         case AST_RETURN: {
-            const Ast_Return *ret = Down(ast);
+            const Ast_Return *ret = xx ast;
             return tprint("return %s", ast_to_string(ret->subexpression));
         }
 
         case AST_LAMBDA_BODY: {
-            const Ast_Lambda_Body *body = Down(ast);
+            const Ast_Lambda_Body *body = xx ast;
             return ast_to_string(&body->block.base);
         }
 
         case AST_LAMBDA: {
-            const Ast_Lambda *lambda = Down(ast);
+            const Ast_Lambda *lambda = xx ast;
             return tprint("%s %s", ast_to_string(xx lambda->type_definition), ast_to_string(xx &lambda->body));
         }
 
         case AST_DECLARATION: {
-            const Ast_Declaration *decl = Down(ast);
+            const Ast_Declaration *decl = xx ast;
             if (decl->flags & DECLARATION_IS_COMPTIME) {
-                return tprint("%s :: %s", ast_to_string(xx &decl->ident), ast_to_string(xx decl->expression));
+                return tprint("%s :: %s", ast_to_string(xx decl->ident), ast_to_string(xx decl->expression));
             }
-            return tprint("%s := %s", ast_to_string(xx &decl->ident), ast_to_string(xx decl->expression));
+            return tprint("%s := %s", ast_to_string(xx decl->ident), ast_to_string(xx decl->expression));
         }
 
-        default: return "**INVALID**";
+        default:
+            printf("The tag is %d\n", ast->type);
+            return "**INVALID**";
     }
 
     #undef xx

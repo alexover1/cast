@@ -4,6 +4,8 @@
 #include "type_info.h"
 #include "interp.h"
 
+#define xx (void*)
+
 const Ast_Declaration *find_declaration_or_null(const Ast_Ident *ident)
 {
     const Ast_Block *block = ident->enclosing_block;
@@ -11,16 +13,14 @@ const Ast_Declaration *find_declaration_or_null(const Ast_Ident *ident)
         For (block->statements) {
             if (block->statements[it]->type != AST_DECLARATION) continue;
 
-            const Ast_Declaration *decl = Down(block->statements[it]);
-            if (strcmp(decl->ident.name, ident->name) == 0) return decl;
+            const Ast_Declaration *decl = xx block->statements[it];
+            if (sv_eq(decl->ident->name, ident->name)) return decl;
         }
         block = block->parent;
     }
 
     return NULL;
 }
-
-#define xx (const Type_Info *)
 
 // TODO: use lexer_report_error
 Type typecheck_ast(const Interp *interp, const Ast *ast)
@@ -29,7 +29,7 @@ Type typecheck_ast(const Interp *interp, const Ast *ast)
 
     switch (ast->type) {       
     case AST_LITERAL: {
-        const Ast_Literal *lit = Down(ast);
+        const Ast_Literal *lit = xx ast;
         if (lit->kind == LITERAL_INT)         return interp->type_table.comptime_int;
         else if (lit->kind == LITERAL_FLOAT)  return interp->type_table.comptime_float;
         else if (lit->kind == LITERAL_STRING) return interp->type_table.comptime_string;
@@ -39,7 +39,7 @@ Type typecheck_ast(const Interp *interp, const Ast *ast)
     }
     
     case AST_BINARY_OPERATOR: {
-        const Ast_Binary_Operator *bin = Down(ast);
+        const Ast_Binary_Operator *bin = xx ast;
         Type left = typecheck_ast(interp, bin->left);
         Type right = typecheck_ast(interp, bin->right);
 
@@ -88,7 +88,7 @@ Type typecheck_ast(const Interp *interp, const Ast *ast)
     }
     
     case AST_PROCEDURE_CALL: {
-        const Ast_Procedure_Call *call = Down(ast);
+        const Ast_Procedure_Call *call = xx ast;
         Type type = typecheck_ast(interp, call->procedure_expression);
 
         assert(type);
@@ -98,7 +98,7 @@ Type typecheck_ast(const Interp *interp, const Ast *ast)
             exit(1);
         }
         
-        const Type_Info_Procedure *proc = Down(type);
+        const Type_Info_Procedure *proc = xx type;
 
         if (arrlenu(call->arguments) != proc->parameter_count) {
             fprintf(stderr, "error: Incorrect number of arguments to function '%s'.\n",
@@ -125,8 +125,7 @@ Type typecheck_ast(const Interp *interp, const Ast *ast)
     }
 
     case AST_IDENT: {
-        const Ast_Ident *ident = Down(ast);
-        assert(ident->name);
+        const Ast_Ident *ident = xx ast;
         assert(ident->enclosing_block);
         const Ast_Declaration *decl = find_declaration_or_null(ident);
         assert(decl);

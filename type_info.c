@@ -7,6 +7,8 @@
 #include "interp.h"
 #include "vendor/stb_ds.h"
 
+#define xx (void*)
+
 #define TYPE_INFO(tag_, size) { \
     .tag = (tag_),              \
     .runtime_size = (size),     \
@@ -49,20 +51,26 @@ Type_Table type_table_init(void)
     return table;
 }
 
-Type parse_literal_type(const Type_Table *table, const char *lit, size_t n)
+Type parse_literal_type(const Type_Table *table, String_View lit)
 {
-    if (n == 3) {
-        if      (strcmp(lit, "int") == 0) return table->INT;
-        else if (strcmp(lit, "s64") == 0) return table->s64;
+    switch (lit.count) {
+    case 3:
+        if (sv_eq(lit, SV("int"))) return table->INT;
+        if (sv_eq(lit, SV("s64"))) return table->s64;
+        break;
+    case 4:
+        if (sv_eq(lit, SV("bool"))) return table->BOOL;
+        if (sv_eq(lit, SV("void"))) return table->VOID;
+        if (sv_eq(lit, SV("Type"))) return table->TYPE;
+        break;
+    case 5:
+        if (sv_eq(lit, SV("float"))) return table->FLOAT;
+        break;
+    case 6:
+        if (sv_eq(lit, SV("string"))) return table->STRING; break;
+    case 7:
+        if (sv_eq(lit, SV("float64"))) return table->float64; break;
     }
-    else if (n == 4) {
-        if (strcmp(lit, "bool") == 0)      return table->BOOL;
-        else if (strcmp(lit, "void") == 0) return table->VOID;
-        else if (strcmp(lit, "Type") == 0) return table->TYPE;
-    }  
-    else if (strcmp(lit, "float") == 0)   return table->FLOAT;
-    else if (strcmp(lit, "float64") == 0)   return table->float64;
-    else if (strcmp(lit, "string") == 0)  return table->STRING;
     return NULL;
 }
 
@@ -85,21 +93,21 @@ bool types_are_equal(const Type_Table *table, const Type_Info *a, const Type_Inf
 
     switch (a->tag) {
         case TYPE_POINTER: {
-            const Type_Info_Pointer *ap = Down(a);
-            const Type_Info_Pointer *bp = Down(b);
+            const Type_Info_Pointer *ap = xx a;
+            const Type_Info_Pointer *bp = xx b;
             return ap->element_type == bp->element_type;
         }
 
         case TYPE_ARRAY: {
-        const Type_Info_Array *aa = Down(a);
-        const Type_Info_Array *ba = Down(b);
+        const Type_Info_Array *aa = xx a;
+        const Type_Info_Array *ba = xx b;
         return types_are_equal(table, aa->element_type, ba->element_type) &&
             aa->element_count == ba->element_count;
         }
         
         case TYPE_PROCEDURE: {
-            const Type_Info_Procedure *ap = Down(a);
-            const Type_Info_Procedure *bp = Down(b);
+            const Type_Info_Procedure *ap = xx a;
+            const Type_Info_Procedure *bp = xx b;
             if (ap->parameter_count != bp->parameter_count) return false;
             if (!types_are_equal(table, ap->return_type, bp->return_type)) {
                 return false;

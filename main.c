@@ -48,63 +48,19 @@ int main(int argc, char **argv)
     parser.arena = &arena;
     parser_init(&parser, input, path_get_file_name(input_file_path.data), input_file_path);
 
-    while (1) {
-        Token token = eat_next_token(&parser);
-        printf("%s\n", token_type_to_string(token.type));
-        if (token.type == TOKEN_NUMBER) parser_report_error(&parser, token, "OH NO");
-        if (token.type == TOKEN_END_OF_INPUT) break;
+    // while (1) {
+    //     Token token = eat_next_token(&parser);
+    //     if (token.type == TOKEN_END_OF_INPUT) break;
+    //     printf(Loc_Fmt": %s (end = %d)\n", SV_Arg(input_file_path), Loc_Arg(token.location), token_type_to_string(token.type), token.location.c1);
+    // }
+
+    Ast_Block *block = parse_toplevel(&parser);
+    printf("--- The block has %ld statement(s). ---\n", arrlen(block->statements));
+    For (block->statements) {
+        printf("%s\n", ast_to_string(block->statements[it]));
     }
 
     arena_free(&temporary_arena);
-    return 0;
-    
-    Ast_Block *file_scope = context_alloc(sizeof(Ast_Block));
-    file_scope->base.type = AST_BLOCK;
-
-    Ast_Declaration *decl = context_alloc(sizeof(Ast_Declaration));
-    decl->base.type = AST_DECLARATION;
-    decl->ident =  (Ast_Ident) {
-        .base = { .type = AST_IDENT },
-        .name = "foo",
-        .enclosing_block = file_scope,
-    };
-    decl->flags |= DECLARATION_IS_COMPTIME;
-    {
-        Ast_Struct *struct_desc = context_alloc(sizeof(Ast_Struct));
-        struct_desc->base.type = AST_STRUCT;
-        struct_desc->scope.base.type = AST_BLOCK;
-        struct_desc->scope.parent = file_scope;
-
-        // position := START;
-        Ast_Declaration *member_decl = context_alloc(sizeof(Ast_Declaration));
-        member_decl->base.type = AST_DECLARATION;
-        member_decl->ident =  (Ast_Ident) {
-            .base = { .type = AST_IDENT },
-            .name = "position",
-            .enclosing_block = file_scope,
-        };
-        member_decl->flags |= DECLARATION_IS_STRUCT_FIELD;
-        {
-            Ast_Literal *lit = context_alloc(sizeof(Ast_Literal));
-            lit->base.type = AST_LITERAL;
-            lit->kind = LITERAL_INT;
-            lit->int_value = 5;
-            member_decl->expression = Base(lit);
-        }
-        arrput(struct_desc->scope.statements, Base(member_decl));
-
-        Ast_Type_Definition *defn = context_alloc(sizeof(Ast_Type_Definition));
-        defn->base.type = AST_TYPE_DEFINITION;
-        defn->struct_desc = struct_desc;
-
-        decl->expression = Base(defn);
-    }
-    arrput(file_scope->statements, Base(decl));
-
-    Interp interp = init_interp();
-    interp_add_scope(&interp, file_scope);
-    interp_run_main_loop(&interp);
-
     return 0;
 }
 

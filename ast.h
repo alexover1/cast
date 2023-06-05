@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "token.h" // for Source_Location
 #include "vendor/sv.h" // for Ast_Ident.name
 
 typedef enum {
@@ -31,13 +32,7 @@ typedef enum {
 typedef struct {
     Ast_Type type;
     uint32_t flags;
-    
-    // l0 is the index of the starting line. l1 is the index of the ending line.
-    // c0 is the index of the starting character (in bytes). c1 is the index of
-    // the ending character.
-    int l0, l1, c0, c1;
-
-    const char *filename;
+    Source_Location location;
 } Ast;
 
 typedef struct Ast_Block Ast_Block;
@@ -80,8 +75,9 @@ typedef struct {
 typedef struct {
     Ast base;
 
-    const char *name;
+    String_View name;
     Ast_Block *enclosing_block;
+    String_View source_file_name;
 } Ast_Ident;
 
 typedef struct {
@@ -153,10 +149,11 @@ struct Ast_Type_Definition {
 
     Ast_Struct *struct_desc;
     Ast_Enum *enum_defn;
-    const char *literal_name;
     Ast_Ident *type_name;
+    Ast_Procedure_Call *struct_call;
 
     // If an array
+    size_t array_length;
     Ast_Type_Definition *array_element_type;
 
     // If a pointer
@@ -186,7 +183,7 @@ struct Ast_Enum {
     Ast base;
 
     Ast_Type_Definition *underlying_int_type;
-    Ast_Block scope;
+    Ast_Block *block;
 };
 
 /// `(x: int) -> int { return x * x; }`
@@ -200,7 +197,7 @@ struct Ast_Lambda {
 struct Ast_Struct {
     Ast base;
     
-    Ast_Block scope;
+    Ast_Block *block;
 };
 
 typedef struct {
@@ -239,7 +236,7 @@ enum {
 typedef struct {
     Ast base;
 
-    Ast_Ident ident;
+    Ast_Ident *ident;
     Ast *expression;
 
     uint32_t flags;

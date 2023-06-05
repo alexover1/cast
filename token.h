@@ -43,7 +43,7 @@ typedef enum {
     TOKEN_KEYWORD_IF,
     TOKEN_KEYWORD_THEN,
     TOKEN_KEYWORD_ELSE,
-    // TOKEN_KEYWORD_CASE,
+    TOKEN_KEYWORD_FOR,
     TOKEN_KEYWORD_RETURN,
     TOKEN_KEYWORD_STRUCT,
     TOKEN_KEYWORD_WHILE,
@@ -71,9 +71,25 @@ typedef enum {
 
 const char *token_type_to_string(int type);
 
+// l0 is the index of the starting line. l1 is the index of the ending line.
+// c0 is the index of the starting character (in bytes). c1 is the index of
+// the ending character.
+typedef struct {
+    int l0, l1; // line range
+    int c0, c1; // character range
+} Source_Location;
+
+#ifndef _WIN32
+#define Loc_Fmt SV_Fmt":%d:%d"
+#else
+#define Loc_Fmt SV_Fmt"%s:%d,%d"
+#endif
+
+#define Loc_Arg(loc) (loc).l0, (loc).c0
+
 typedef struct {
     int type;
-    int line, c0, c1;
+    Source_Location location; // I wish we had using...
     
     union {
         uint64_t int_value;

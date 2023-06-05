@@ -73,7 +73,7 @@ typedef struct {
 } Type_Table;
 
 Type_Table type_table_init(void);
-Type parse_literal_type(const Type_Table *table, const char *lit, size_t n);
+Type parse_literal_type(const Type_Table *table, String_View lit);
 Type type_table_append(Type_Table *table, void *item, size_t item_size);
-const char *type_to_string(const Type_Table *table, Type offset);
-bool types_are_equal(const Type_Table *table, Type offset_a, Type offset_b);
+const char *type_to_string(const Type_Table *table, Type type);
+bool types_are_equal(const Type_Table *table, Type a, Type b);
