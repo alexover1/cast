@@ -156,8 +156,10 @@ Token find_next_token(Parser *parser)
         String_View literal = sv_chop_left_while(&parser->current_line, continues_identifier);
         token.location.c1 = parser_current_character_index(parser);
         token.number_flags = 0;
-        bool ok = parse_int_value(literal, 10, &token.int_value);
-        token.type = ok ? TOKEN_NUMBER : TOKEN_ERROR;
+        if (!parse_int_value(literal, 10, &token.int_value)) {
+            parser_report_error(parser, token.location, "Illegal characters in number literal.");
+        }
+        token.type = TOKEN_NUMBER;
         return token;
     }
 
@@ -174,6 +176,21 @@ Token find_next_token(Parser *parser)
     token.type = eat_character(parser);
 
     switch (token.type) {
+    case '"': {
+        size_t n = 0;
+        while (n < parser->current_line.count) {
+            if (parser->current_line.data[n] == '"') {
+                token.type = TOKEN_STRING;
+                token.string_value = sv_chop_left(&parser->current_line, n);
+                token.location.c1 = parser_current_character_index(parser);
+                eat_character(parser);
+                return token;
+            }
+            n += 1;
+        }
+        token.location.c1 = parser_current_character_index(parser);
+        parser_report_error(parser, token.location, "While parsing a string literal, we encountered the end of the input.");
+    }
     case '-': {
         int d = peek_character(parser);
         if (d == '=') {

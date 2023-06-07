@@ -29,11 +29,14 @@ typedef enum {
     AST_USING = 18,
 } Ast_Type;
 
-typedef struct {
+typedef struct Ast Ast;
+
+struct Ast {
     Ast_Type type;
     uint32_t flags;
     Source_Location location;
-} Ast;
+    Ast *replacement;
+};
 
 typedef struct Ast_Block Ast_Block;
 typedef struct Ast_Lambda Ast_Lambda;

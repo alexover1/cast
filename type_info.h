@@ -15,6 +15,7 @@ typedef enum {
     TYPE_POINTER = 8,
     TYPE_ARRAY = 9,
     TYPE_TYPE = 10,
+    TYPE_CODE = 11,
 } Type_Info_Tag;
 
 typedef struct {
@@ -52,6 +53,7 @@ typedef struct {
 typedef struct {
     Type_Info info; // @using
     Type element_type;
+    size_t pointer_level;
 } Type_Info_Pointer;
 
 typedef struct {
@@ -65,15 +67,17 @@ typedef struct {
     Type *types; // @malloced with stb_ds
 
     Type INT, FLOAT, BOOL, VOID, STRING;
-    Type TYPE, CODE;
+    Type TYPE, CODE, null;
     Type s8, s16, s32, s64;
     Type u8, u16, u32, u64;
+    Type float64;
+    Type AUTOCAST;
     Type comptime_int, comptime_float, comptime_string; // TODO: maybe add an AUTOCAST type?
-    Type float64, anyptr;
 } Type_Table;
 
 Type_Table type_table_init(void);
 Type parse_literal_type(const Type_Table *table, String_View lit);
+Type type_table_append_pointer_to(Type_Table *table, Type element_type);
 Type type_table_append(Type_Table *table, void *item, size_t item_size);
 const char *type_to_string(const Type_Table *table, Type type);
 bool types_are_equal(const Type_Table *table, Type a, Type b);

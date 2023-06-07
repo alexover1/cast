@@ -5,15 +5,6 @@
 
 #define xx (void*)
 
-static inline void *ast_alloc(Parser *p, Source_Location loc, Ast_Type type, size_t size)
-{
-    Ast *ast = arena_alloc(p->arena, size);
-    memset(ast, 0, size);
-    ast->type = type;
-    ast->location = loc;
-    return ast;
-}
-
 static inline Ast_Ident *make_identifier(Parser *p, Token token)
 {
     Ast_Ident *ident = ast_alloc(p, token.location, AST_IDENT, sizeof(*ident));
@@ -108,6 +99,15 @@ static bool statement_requires_semicolon(Ast *stmt)
     }
 }
 
+inline void *ast_alloc(Parser *p, Source_Location loc, Ast_Type type, size_t size)
+{
+    Ast *ast = arena_alloc(p->arena, size);
+    ast->type = type;
+    ast->location = loc;
+    memset(ast + sizeof(Ast), 0, size - sizeof(Ast));
+    return ast;
+}
+
 Ast *parse_binary_expression(Parser *p, Ast *left, int precedence)
 {
     if (left == NULL) left = parse_unary_expression(p);
@@ -121,6 +121,7 @@ Ast *parse_binary_expression(Parser *p, Ast *left, int precedence)
         if (token_precedence < precedence) {
             return left;
         }
+        // TODO: Do we even check that it's a valid binary operator?
         eat_next_token(p);
         bin = ast_alloc(p, token.location, AST_BINARY_OPERATOR, sizeof(*bin));
         bin->left = left;
@@ -140,7 +141,6 @@ Ast *parse_unary_expression(Parser *p)
     case '*':
     case '!':
     case TOKEN_BITWISE_NOT:
-    case TOKEN_BITWISE_XOR:
     case TOKEN_POINTER_DEREFERENCE_OR_SHIFT_LEFT:
     {
         eat_next_token(p);
@@ -700,6 +700,8 @@ inline void parser_init(Parser *parser, String_View input, String_View file_name
 
     // l->peek_token can stay uninitialized as we should never read from it directly
     parser->peek_full = false;
+
+    parser->reported_error = false;
 
     parser->block = NULL;
 }

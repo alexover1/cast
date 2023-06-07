@@ -9,17 +9,16 @@
 // Really, this needs to be renamed. It's a single "thing"
 // that we push through all steps of compilation.
 
-typedef struct Object Object;
-
-struct Object {
+typedef struct {
     const Ast_Declaration *key;
     const Type_Info *inferred_type;
+    LLVMTypeRef llvm_type;
 
     union {
         LLVMValueRef llvm_value;
         Type type_value;
         // Inst_Addr instruction_address;
     };
-};
+} Object;
 
 Object init_object(const Ast_Declaration *declaration);

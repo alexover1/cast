@@ -2,6 +2,9 @@
 #include <string.h> // strerror
 #include <stdlib.h> // exit
 
+#include <llvm-c/Core.h>
+#include <llvm-c/Target.h>
+
 #include "common.h"
 #include "vendor/arena.h"
 #include "vendor/stb_ds.h"
@@ -42,26 +45,26 @@ int main(int argc, char **argv)
         exit(1);
     }
 
-    Arena arena = {0};
+    String_View input_file_name = path_get_file_name(input_file_path.data);
 
-    Parser parser;
-    parser.arena = &arena;
-    parser_init(&parser, input, path_get_file_name(input_file_path.data), input_file_path);
+    Interp interp = init_interp(arena_sv_to_cstr(&temporary_arena, input_file_name));
+    interp.parser.arena = &interp.arena; // TODO: This should be set somehow automatically.
+    parser_init(&interp.parser, input, input_file_name, input_file_path);
 
     // while (1) {
-    //     Token token = eat_next_token(&parser);
+    //     Token token = eat_next_token(&interp.parser);
     //     if (token.type == TOKEN_END_OF_INPUT) break;
     //     printf(Loc_Fmt": %s (end = %d)\n", SV_Arg(input_file_path), Loc_Arg(token.location), token_type_to_string(token.type), token.location.c1);
     // }
 
-    Ast_Block *block = parse_toplevel(&parser);
+    Ast_Block *block = parse_toplevel(&interp.parser);
     printf("--- The block has %ld statement(s). ---\n", arrlen(block->statements));
     For (block->statements) {
         printf("%s\n", ast_to_string(block->statements[it]));
     }
 
-    Interp interp = init_interp();
     interp_add_scope(&interp, block);
+    interp_prepare_llvm_context(&interp);
     interp_run_main_loop(&interp);
 
     arena_free(&temporary_arena);

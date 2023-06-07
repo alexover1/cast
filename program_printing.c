@@ -17,7 +17,6 @@ const char *type_to_string(const Type_Table *table, const Type_Info *type)
     if (type == table->FLOAT)           return "float";
     if (type == table->BOOL)            return "bool";
     if (type == table->float64)         return "float64";
-    if (type == table->anyptr)          return "anyptr";
     if (type == table->comptime_int)    return "comptime_int";
     if (type == table->comptime_float)  return "comptime_float";
     if (type == table->comptime_string) return "comptime_string";
@@ -76,7 +75,7 @@ const char *type_to_string(const Type_Table *table, const Type_Info *type)
 
         case TYPE_POINTER: {
             const Type_Info_Pointer *pointer = xx type;
-            return tprint("*%s", type_to_string(table, pointer->element_type));
+            return tprint("%.*s%s", pointer->pointer_level, "********************", type_to_string(table, pointer->element_type));
         }
 
         case TYPE_ARRAY: {

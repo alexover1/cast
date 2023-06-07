@@ -20,11 +20,14 @@ typedef struct {
 
     Token peek_token;
     bool peek_full;
+    bool reported_error;
 
     // Stuff for parsing:
 
     Ast_Block *block;
 } Parser;
+
+void *ast_alloc(Parser *p, Source_Location loc, Ast_Type type, size_t size);
 
 // Lexing:
 

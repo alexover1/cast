@@ -10,23 +10,11 @@
 
 static void infer_object(Interp *interp, Object *object)
 {
-    if (object->inferred_type != NULL) return;
+    assert(!object->inferred_type);
 
     const Ast_Declaration *decl = object->key;
     const Ast *ast = decl->expression;
 
-    // Type instantiations need to have their types created before being typechecked,
-    // unlike type definitions that always result in type 'Type.'
-
-    if (ast->type == AST_TYPE_INSTANTIATION) {
-        const Ast_Type_Instantiation *inst = xx ast;
-        assert(inst->type_definition);
-
-        // This still might return NULL.
-        object->inferred_type = interp_get_type(interp, inst->type_definition);
-        return;
-    }
-        
     // Type definitions must add a type into the type table.
 
     if (ast->type == AST_TYPE_DEFINITION) {
@@ -46,7 +34,7 @@ static void infer_object(Interp *interp, Object *object)
         return;
     }
 
-    object->inferred_type = typecheck_ast(interp, ast);
+    object->inferred_type = typecheck_expression(interp, ast);
 
     // Replace comptime types for non-comptime declarations.
 
@@ -57,8 +45,161 @@ static void infer_object(Interp *interp, Object *object)
     }
 }
 
+#define BYTE 8
+
+static LLVMTypeRef llvm_build_type(Interp *interp, Type inferred_type)
+{
+    // TODO: handle type_table.null
+    assert(inferred_type != interp->type_table.null);
+    
+    switch (inferred_type->tag) {
+    case TYPE_INTEGER:
+        return LLVMIntTypeInContext(interp->llvm_context, inferred_type->runtime_size * BYTE);
+    case TYPE_FLOAT:
+        if (inferred_type == interp->type_table.FLOAT) {
+            return LLVMFloatTypeInContext(interp->llvm_context);
+        }
+        // We only have 2 floating-point types.
+        assert(inferred_type == interp->type_table.float64);
+        return LLVMDoubleTypeInContext(interp->llvm_context);
+    case TYPE_BOOL:
+        return LLVMIntTypeInContext(interp->llvm_context, 1 * BYTE);
+    case TYPE_STRING: {
+        LLVMTypeRef elems[] = {
+            LLVMPointerType(LLVMInt8TypeInContext(interp->llvm_context), 0), // *u8
+            LLVMInt64TypeInContext(interp->llvm_context), // u64
+        };
+        return LLVMStructTypeInContext(interp->llvm_context, elems, sizeof(elems)/sizeof(elems[0]), 1); // 1 means packed
+    }
+    case TYPE_VOID:
+        return LLVMVoidTypeInContext(interp->llvm_context);
+    case TYPE_PROCEDURE: {
+        const Type_Info_Procedure *info = xx inferred_type;
+        assert(info->parameter_count <= 128);
+        LLVMTypeRef param_types[128];
+        for (size_t i = 0; i < info->parameter_count; ++i) {
+            param_types[i] = llvm_build_type(interp, info->parameters[i]);
+        }
+        LLVMTypeRef return_type = llvm_build_type(interp, info->return_type);
+        return LLVMFunctionType(return_type, param_types, info->parameter_count, 0); // 0 means no varargs
+    }
+    case TYPE_STRUCT: {
+        const Type_Info_Struct *info = xx inferred_type;
+        assert(info->field_count <= 128);
+        LLVMTypeRef field_types[128];
+        for (size_t i = 0; i < info->field_count; ++i) {
+            field_types[i] = llvm_build_type(interp, info->field_data[i].type);
+        }
+        return LLVMStructTypeInContext(interp->llvm_context, field_types, info->field_count, 1); // 1 means packed
+    }
+    case TYPE_POINTER: {
+        // We store a type like '***int' by storing the base element and the number of pointers.
+        // But, LLVM wants pointer(pointer(pointer(int))) so we have to unroll it.
+        const Type_Info_Pointer *info = xx inferred_type;
+        LLVMTypeRef res = llvm_build_type(interp, info->element_type);
+        for (size_t i = 0; i < info->pointer_level; ++i) {
+            res = LLVMPointerType(res, 0);
+        }
+        return res;
+    }
+    case TYPE_ARRAY: {
+        const Type_Info_Array *info = xx inferred_type;
+        return LLVMArrayType(llvm_build_type(interp, info->element_type), (unsigned) info->element_count);
+    }
+    case TYPE_TYPE:
+    case TYPE_CODE:
+        return LLVMPointerTypeInContext(interp->llvm_context, 0);
+    }
+}
+
+static inline LLVMValueRef llvm_create_stack_variable(Interp *interp, LLVMTypeRef type, LLVMValueRef initializer)
+{
+    // Step 1: Allocate memory on the stack for the variable
+    LLVMValueRef alloca_inst = LLVMBuildAlloca(interp->llvm_builder, type, "");
+
+    // Step 2: Store the constant initializer into the allocated memory
+    LLVMBuildStore(interp->llvm_builder, initializer, alloca_inst);
+
+    return alloca_inst;
+}
+
+static LLVMValueRef llvm_build_value_from_ast(Interp *interp, const Ast *ast, LLVMTypeRef type)
+{
+    assert(ast);   
+    switch (ast->type) {
+    case AST_BLOCK: {
+        const Ast_Block *block = xx ast;
+        LLVMBasicBlockRef basic_block = LLVMCreateBasicBlockInContext(interp->llvm_context, NULL);
+        LLVMPositionBuilderAtEnd(interp->llvm_builder, basic_block);
+        For (block->statements) {
+            llvm_build_value_from_ast(interp, block->statements[it], NULL);
+        }
+        return LLVMBasicBlockAsValue(basic_block);
+    }
+
+    case AST_LITERAL: {
+        const Ast_Literal *lit = xx ast;
+        assert(type);
+        switch (lit->kind) {
+        case LITERAL_INT:
+            return LLVMConstInt(type, lit->int_value, 1);
+        case LITERAL_BOOL:
+            return LLVMConstInt(type, lit->bool_value, 0);
+        case LITERAL_NULL:
+            return LLVMConstNull(type);
+        case LITERAL_FLOAT:
+            return LLVMConstReal(type, (double) lit->float_value);
+        case LITERAL_STRING: {
+            const char *data = lit->string_value.data;
+            size_t count = lit->string_value.count;
+
+            // Create the array and *u8 types.
+            LLVMTypeRef u8_type = LLVMInt8TypeInContext(interp->llvm_context);
+            LLVMTypeRef array_type = LLVMArrayType(u8_type, count);
+            LLVMTypeRef u8_pointer_type = LLVMPointerType(u8_type, 0);
+
+            // Create global variable with the array of characters.
+            LLVMValueRef global_string = LLVMAddGlobal(interp->llvm_module, array_type, "");
+            LLVMSetLinkage(global_string, LLVMPrivateLinkage);
+            LLVMSetInitializer(global_string, LLVMConstStringInContext(interp->llvm_context, data, count, 1));
+
+            // Create constant structure value.
+            LLVMValueRef struct_fields[] = {
+                LLVMConstBitCast(global_string, u8_pointer_type),
+                LLVMConstInt(LLVMInt64TypeInContext(interp->llvm_context), count, 0),
+            };
+                    
+            return LLVMConstStructInContext(interp->llvm_context,
+                struct_fields, sizeof(struct_fields)/sizeof(struct_fields[0]), 1);
+        }
+        }
+    }
+
+    case AST_IDENT:
+        UNIMPLEMENTED;
+
+    case AST_UNARY_OPERATOR: {
+        const Ast_Unary_Operator *unary = xx ast;
+        (void)unary;
+        UNIMPLEMENTED;
+    }
+
+    case AST_DECLARATION:
+        assert(0);
+
+    default:
+        // Unhandled
+        assert(0);
+    }
+}
+
 Type interp_get_type(Interp *interp, const Ast_Type_Definition *defn)
 {
+    {
+        const Type_Info *existing_type = hmget(interp->type_definitions, defn);
+        if (existing_type) return existing_type;
+    }
+    
     if (defn->struct_desc) {
         const Ast_Block *block = defn->struct_desc->block;
 
@@ -98,7 +239,9 @@ Type interp_get_type(Interp *interp, const Ast_Type_Definition *defn)
             field->offset = -1;
         }
 
-        return type_table_append(&interp->type_table, &struct_type, sizeof(struct_type));
+        Type type = type_table_append(&interp->type_table, &struct_type, sizeof(struct_type));
+        hmput(interp->type_definitions, defn, type);
+        return type;
     }
 
     if (defn->enum_defn) {
@@ -107,21 +250,25 @@ Type interp_get_type(Interp *interp, const Ast_Type_Definition *defn)
 
     if (defn->type_name) {
         Type type = parse_literal_type(&interp->type_table, defn->type_name->name);
-        if (type != NULL) return type;
+        if (type != NULL) {
+            hmput(interp->type_definitions, defn, type);
+            return type;
+        }
         
         const Ast_Declaration *decl = find_declaration_or_null(defn->type_name);
         if (!decl) {
-            fprintf(stderr, "error: Undeclared identifier '"SV_Fmt"'\n", SV_Arg(defn->type_name->name));
-            exit(1);
+            parser_report_error(&interp->parser, decl->base.location, "Undeclared identifier '"SV_Fmt"'.", SV_Arg(defn->type_name->name));
+            return NULL;
         }
         Object *object = hmgetp_null(interp->objects, decl);
         assert(object);
         if (object->inferred_type == NULL) return NULL; // We must wait on this.
         if (object->inferred_type != interp->type_table.TYPE) {
-            // TODO: just print the name of the object and what type it actually is.
-            fprintf(stderr, "error: '%s' is not a type\n", ast_to_string(xx decl->expression));
-            exit(1);
+            parser_report_error(&interp->parser, decl->base.location, "Type mismatch: '"SV_Fmt"' is not a type (actual type is %s).",
+                SV_Arg(defn->type_name->name), type_to_string(&interp->type_table, object->inferred_type));
+            return NULL;
         }
+        hmput(interp->type_definitions, defn, object->type_value);
         return object->type_value;
     }
 
@@ -193,14 +340,68 @@ void interp_run_main_loop(Interp *interp)
             }
         }
     }
+
+    {
+        LLVMTypeRef llvm_function_type = LLVMFunctionType(LLVMVoidTypeInContext(interp->llvm_context), NULL, 0, 0);
+        LLVMValueRef llvm_function = LLVMAddFunction(interp->llvm_module, "main", llvm_function_type);
+        LLVMBasicBlockRef llvm_block = LLVMAppendBasicBlockInContext(interp->llvm_context, llvm_function, "");
+        LLVMPositionBuilderAtEnd(interp->llvm_builder, llvm_block);
+    }
+
+    for (int i = 0; i < hmlen(interp->objects); ++i) {
+        const Ast_Declaration *decl = interp->objects[i].key;
+        Type type = interp->objects[i].inferred_type;
+        assert(type);
+
+        LLVMTypeRef llvm_type = llvm_build_type(interp, type);
+        LLVMValueRef llvm_value = llvm_build_value_from_ast(interp, decl->expression, llvm_type);
+
+        if ((decl->flags&DECLARATION_IS_COMPTIME) == 0) {
+            // Wrap the value in a stack variable.
+            llvm_value = llvm_create_stack_variable(interp, llvm_type, llvm_value);
+        }
+
+        interp->objects[i].llvm_value = llvm_value;
+        interp->objects[i].llvm_type = llvm_type;
+    }
+
+    printf("--- Generated LLVM module. ---\n");
+    LLVMDumpModule(interp->llvm_module);
 }
 
-Interp init_interp(void)
+void interp_prepare_llvm_context(Interp *interp)
+{
+    LLVMInitializeAllTargetInfos();
+    LLVMInitializeAllTargets();
+    LLVMInitializeAllTargetMCs();
+    LLVMInitializeAllAsmParsers();
+    LLVMInitializeAllAsmPrinters();
+
+    interp->llvm_context = LLVMContextCreate();
+    LLVMContextSetOpaquePointers(interp->llvm_context, 1);
+    LLVMContextSetDiscardValueNames(interp->llvm_context, 1);
+
+    interp->llvm_module = LLVMModuleCreateWithNameInContext(interp->workspace_name, interp->llvm_context);
+    LLVMSetSourceFileName(interp->llvm_module, interp->parser.path_name.data, interp->parser.path_name.count);
+
+    interp->llvm_builder = LLVMCreateBuilderInContext(interp->llvm_context);
+}
+
+Interp init_interp(const char *workspace_name)
 {
     Interp interp;
+    interp.workspace_name = workspace_name;
+    interp.arena = (Arena){0};
+
     interp.objects = NULL;
+    interp.type_definitions = NULL;
+    hmdefault(interp.type_definitions, (Type)NULL);
     interp.queue = NULL;
     interp.type_table = type_table_init();
+
+    interp.llvm_context = NULL;
+    interp.llvm_module = NULL;
+    interp.llvm_builder = NULL;
     return interp;
 }
 
@@ -209,6 +410,7 @@ Object init_object(const Ast_Declaration *declaration)
     Object object;
     object.key = declaration;
     object.inferred_type = NULL;
+    object.llvm_type = NULL;
     object.type_value = NULL;
     return object;
 }
