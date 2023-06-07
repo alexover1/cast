@@ -167,7 +167,7 @@ const char *ast_to_string(const Ast *ast)
             switch (lit->kind) {
             case LITERAL_INT:    return tprint("%llu", lit->int_value);
             case LITERAL_FLOAT:  return tprint("%f", lit->float_value);
-            case LITERAL_STRING: return tprint("\"%*.s\"", lit->string_value.count, lit->string_value.data);
+            case LITERAL_STRING: return tprint("\""SV_Fmt"\"", SV_Arg(lit->string_value));
             case LITERAL_BOOL:   return lit->bool_value ? "true" : "false";
             case LITERAL_NULL:   return "null";
             }

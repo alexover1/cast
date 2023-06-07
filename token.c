@@ -180,8 +180,9 @@ Token find_next_token(Parser *parser)
         size_t n = 0;
         while (n < parser->current_line.count) {
             if (parser->current_line.data[n] == '"') {
+                // Copy because the input string will be freed before the Ast_Literal is freed. 
+                token.string_value = arena_sv_copy(parser->arena, sv_chop_left(&parser->current_line, n));
                 token.type = TOKEN_STRING;
-                token.string_value = sv_chop_left(&parser->current_line, n);
                 token.location.c1 = parser_current_character_index(parser);
                 eat_character(parser);
                 return token;
