@@ -71,7 +71,7 @@ Ast_Literal *make_string_literal(Workspace *w, String_View value)
 
 void flatten_for_typechecking(Workspace *w, Ast *ast)
 {
-    if (ast == NULL) return; // @nocheckin.
+    if (ast == NULL) return;
     switch (ast->type) {
     case AST_BLOCK: {
         Ast_Block *block = xx ast;
