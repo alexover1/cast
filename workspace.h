@@ -4,6 +4,7 @@
 #include <llvm-c/Target.h>
 
 #include "parser.h"
+#include "typecheck.h"
 
 typedef struct {
     LLVMContextRef context;
@@ -43,6 +44,42 @@ Workspace create_workspace(const char *name);
 void workspace_add_file(Workspace *w, const char *path_as_cstr);
 void workspace_add_string(Workspace *w, String_View input);
 void workspace_run(Workspace *w);
+
+// Messaging:
+
+typedef enum {
+    MESSAGE_END = 0,
+    MESSAGE_TYPECHECKED = 1,
+    MESSAGE_BYTECODED = 2,
+    MESSAGE_LLVMED = 3,
+} Compiler_Message_Type;
+
+typedef struct {
+    Ast *ast;
+} Compiler_Message_Typechecked;
+
+typedef struct {
+    Ast *ast;
+    // Bytecode bytecode;
+} Compiler_Message_Bytecoded;
+
+typedef struct {
+    Ast *ast;
+    LLVMTypeRef type;
+    LLVMValueRef value;
+    // Bytecode bytecode;
+} Compiler_Message_Llvmed;
+
+typedef struct {
+    Compiler_Message_Type type;
+    union {
+        Compiler_Message_Typechecked typechecked;
+        Compiler_Message_Bytecoded bytecoded;
+        Compiler_Message_Llvmed llvmed;
+    };
+} Compiler_Message;
+
+Compiler_Message compiler_next_message(Workspace *workspace);
 
 // Type checking:
 

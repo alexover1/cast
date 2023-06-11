@@ -25,6 +25,16 @@ static inline Ast_Ident *make_identifier(Parser *p, Token token)
     return ident;
 }
 
+static inline Ast_Type_Definition *make_type_definition(Parser *p, Source_Location loc)
+{
+    Ast_Type_Definition *type = context_alloc(sizeof(*type));
+    type->base.type = AST_TYPE_DEFINITION;
+    type->base.inferred_type = p->workspace->type_def_type;
+    type->base.location = loc;
+    type->base.file_name = p->file_name;
+    return type;
+}
+
 static int operator_precedence_from_token_type(int type)
 {
     switch (type) {
@@ -105,7 +115,8 @@ static bool statement_requires_semicolon(Ast *stmt)
     }
     case AST_DECLARATION: {
         Ast_Declaration *decl = xx stmt;
-        return statement_requires_semicolon(decl->expression);
+        if (decl->expression) return statement_requires_semicolon(decl->expression);
+        return true; // Declarations with no value must have a semicolon.
     }
     default: return true;
     }
@@ -388,7 +399,7 @@ Ast_Type_Definition *parse_struct_desc(Parser *p)
 
     parse_into_block(p, struct_desc->block);
 
-    Ast_Type_Definition *defn = ast_alloc(p, token.location, AST_TYPE_DEFINITION, sizeof(*defn));
+    Ast_Type_Definition *defn = make_type_definition(p, token.location);
     defn->struct_desc = struct_desc;
     return defn;
 }
@@ -406,7 +417,7 @@ Ast_Type_Definition *parse_enum_defn(Parser *p)
 
     parse_into_block(p, enum_defn->block);
 
-    Ast_Type_Definition *defn = ast_alloc(p, token.location, AST_TYPE_DEFINITION, sizeof(*defn));
+    Ast_Type_Definition *defn = make_type_definition(p, token.location);
     defn->enum_defn = enum_defn;
     return defn;
 }
@@ -418,11 +429,10 @@ Ast_Type_Definition *parse_lambda_type(Parser *p)
 
     Source_Location location = token.location;
 
-    Ast_Type_Definition *type_definition = ast_alloc(p, location, AST_TYPE_DEFINITION, sizeof(*type_definition));
+    Ast_Type_Definition *type_definition = make_type_definition(p, location);
 
     while (1) {
         Ast_Declaration *parameter = parse_lambda_argument(p);
-        checked_add_to_scope(p, p->block, parameter);
 
         assert(parameter->my_type); // TODO: We want to be able to put "name := value" in procedure type.
         arrput(type_definition->lambda_argument_types, parameter->my_type);
@@ -489,13 +499,13 @@ Ast_Type_Definition *parse_type_definition(Parser *parser, Ast *type_expression)
     if (type_expression != NULL) {
         switch (type_expression->type) {
         case AST_IDENT: {
-            Ast_Type_Definition *defn = ast_alloc(parser, type_expression->location, AST_TYPE_DEFINITION, sizeof(*defn));
+            Ast_Type_Definition *defn = make_type_definition(parser, type_expression->location);
             defn->type_name = (Ast_Ident *)type_expression;
             return defn;
         }
             
         case AST_UNARY_OPERATOR: {
-            Ast_Type_Definition *defn = ast_alloc(parser, type_expression->location, AST_TYPE_DEFINITION, sizeof(*defn));
+            Ast_Type_Definition *defn = make_type_definition(parser, type_expression->location);
             // Unroll unary '*'.
             while (type_expression->type == AST_UNARY_OPERATOR) {
                 Ast_Unary_Operator *unary = xx type_expression;
@@ -517,7 +527,7 @@ Ast_Type_Definition *parse_type_definition(Parser *parser, Ast *type_expression)
             parser_report_error(parser, type_expression->location, "Here we expected a type, but we got an initializer.");
 
         case AST_PROCEDURE_CALL: {
-            Ast_Type_Definition *defn = ast_alloc(parser, type_expression->location, AST_TYPE_DEFINITION, sizeof(*defn));
+            Ast_Type_Definition *defn = make_type_definition(parser, type_expression->location);
             defn->struct_call = (Ast_Procedure_Call *)type_expression;
             return defn;
         }
@@ -548,7 +558,7 @@ Ast_Type_Definition *parse_type_definition(Parser *parser, Ast *type_expression)
     }
 
     Token token = peek_next_token(parser);
-    Ast_Type_Definition *defn = ast_alloc(parser, token.location, AST_TYPE_DEFINITION, sizeof(*defn));
+    Ast_Type_Definition *defn = make_type_definition(parser, token.location);
     
     switch (token.type) {
     case '*': {
@@ -717,6 +727,11 @@ Ast *parse_statement(Parser *p)
     case TOKEN_KEYWORD_CONTINUE:
     {
         eat_next_token(p);
+
+        if (!p->block->belongs_to_loop) {
+            parser_report_error(p, token.location, "Cannot use '%s' outside of a loop.", token_type_to_string(token.type));
+        }
+                
         Ast_Loop_Control *loop_control = ast_alloc(p, token.location, AST_LOOP_CONTROL, sizeof(*loop_control));
         loop_control->keyword_type = token.type;
         // TODO: We want to parse an expression/identifier here for labeled break/continue statements.
@@ -758,7 +773,7 @@ Ast_Declaration *parse_declaration(Parser *p)
     }
 
     // Add the declaration to the block.
-    arrput(p->block->declarations, decl);
+    checked_add_to_scope(p, p->block, decl);
 
     // After first colon has been parsed, we expect an optional type definition and then ':' or '='.
 
@@ -845,7 +860,7 @@ Ast_Block *parse_toplevel(Parser *p)
 #define RESET "\x1B[0m"
 #define TAB   "    "
 
-void sb_print_bytes(String_View s)
+void sv_print_bytes(String_View s)
 {
     for (size_t i = 0; i < s.count; ++i) {
         printf("%2x ", s.data[i]);
@@ -857,23 +872,14 @@ void parser_report_error(Parser *parser, Source_Location loc, const char *format
 {
     va_list args;
     va_start(args, format);
-    const char *msg = vtprint(format, args);
-    assert(msg);
 
     if (loc.l1 < 0) loc.l1 = loc.l0;
     if (loc.c1 < 0) loc.c1 = loc.c0;
 
-    // Setup the allocator and init string builder.
-
-    Arena *previous_arena = context_arena;
-    context_arena = &temporary_arena;
-
-    String_Builder sb = {0};
-
     // Display the error message.
-    sb_print(&sb, Loc_Fmt": Error: %s\n", SV_Arg(parser->current_file.path), Loc_Arg(loc), msg);
-
-    sb_append(&sb, "\n", 1);
+    fprintf(stderr, Loc_Fmt": Error: ", SV_Arg(parser->current_file.path), Loc_Arg(loc));
+    vfprintf(stderr, format, args);
+    fprintf(stderr, "\n\n");
 
     // TODO: I want to "normalize" the indentation.
     // When we add lines to the parser, we can add it
@@ -888,30 +894,42 @@ void parser_report_error(Parser *parser, Source_Location loc, const char *format
     int ln = loc.l0;
 
     // Display the previous line if it exists.
-    
-    if (ln > 0 && parser->lines[ln-1].count) {
-        sb_print(&sb, TAB CYN SV_Fmt "\n" RESET, SV_Arg(parser->lines[ln-1]));
+    String_View prev = (ln > 0) ? parser->lines[ln-1] : SV_NULL;
+    String_View line = parser->lines[ln];
+
+    if (prev.count > 1) {
+        size_t count = Min(size_t, prev.count, line.count);
+        size_t n = 0;
+        while (n < count && prev.data[n] == line.data[n] && isspace(prev.data[n])) {
+            n += 1;
+        }
+        sv_chop_left(&prev, n);
+        sv_chop_left(&line, n);
+
+        fprintf(stderr, TAB CYN SV_Fmt RESET, SV_Arg(prev));
+
+        loc.c0 -= n;
+        loc.c1 -= n;
     } else {
-        // TODO: I kinda want to print the next line.
+        size_t n = 0;
+        while (n < line.count && isspace(line.data[n])) {
+            n += 1;
+        }
+        sv_chop_left(&line, n);
+        loc.c0 -= n;
+        loc.c1 -= n;
     }
 
     // Highlight the token in red.
 
-    String_View line = parser->lines[ln];
+    fprintf(stderr, TAB CYN SV_Fmt, loc.c0, line.data);
+    fprintf(stderr,     RED SV_Fmt, loc.c1 - loc.c0, line.data + loc.c0);
+    fprintf(stderr,     CYN SV_Fmt, (int)line.count - loc.c1, line.data + loc.c1);
 
-    sb_print(&sb, TAB CYN SV_Fmt, loc.c0, line.data);
-    sb_print(&sb,     RED SV_Fmt, loc.c1 - loc.c0, line.data + loc.c0);
-    sb_print(&sb,     CYN SV_Fmt, (int)line.count - loc.c1, line.data + loc.c1);
+    fprintf(stderr, "\n" RESET);
 
-    sb_append_cstr(&sb, "\n\n" RESET);
-
-    // Finally, print the string builder to stderr and exit.
-
-    context_arena = previous_arena;
-
-    fprintf(stderr, SV_Fmt, SV_Arg(sb));
-    // exit(1);
-
+    parser->reported_error = true;
+    
     va_end(args);
 }
 
@@ -936,13 +954,29 @@ void checked_add_to_scope(Parser *p, Ast_Block *block, Ast_Declaration *decl)
 {
     if (decl->ident) {
         For (block->declarations) {
+            if (!block->declarations[it]->ident) continue;
             if (sv_eq(block->declarations[it]->ident->name, decl->ident->name)) {
-                parser_report_error(p, decl->base.location, "Redeclared identifier '%s'.", decl->ident->name);
+                parser_report_error(p, decl->base.location, "Redeclared identifier '"SV_Fmt"'.", SV_Arg(decl->ident->name));
+                parser_report_error(p, block->declarations[it]->ident->base.location, "... the first declaration was here.");
                 // TODO: Print other declaration location.
             }
         }
     }
     arrput(block->declarations, decl);
+}
+
+Ast_Declaration *find_declaration_if_exists(const Ast_Ident *ident)
+{
+    Ast_Block *block = ident->enclosing_block;
+    while (block) {
+        For (block->declarations) {
+            if (sv_eq(block->declarations[it]->ident->name, ident->name)) {
+                return block->declarations[it];
+            }
+        }
+        block = block->parent;
+    }
+    return NULL;
 }
 
 const char *ast_type_to_string(Ast_Type type)

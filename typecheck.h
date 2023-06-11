@@ -67,11 +67,11 @@ typedef struct {
 bool types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y);
 bool pointer_types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y);
 
-bool typecheck_literal(Workspace *w, Ast_Literal *literal);
+void typecheck_literal(Workspace *w, Ast_Literal *literal);
 void typecheck_literal_as_type(Workspace *w, Ast_Literal *literal, Ast_Type_Definition *type_def);
-bool typecheck_identifier(Workspace *w, Ast_Ident *ident);
-bool typecheck_unary_operator(Workspace *w, Ast_Unary_Operator *unary);
-bool typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary);
-bool typecheck_ast(Workspace *w, Ast *ast);
+void typecheck_identifier(Workspace *w, Ast_Ident *ident);
+void typecheck_unary_operator(Workspace *w, Ast_Unary_Operator *unary);
+void typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary);
+void typecheck_ast(Workspace *w, Ast *ast);
 
 void report_error(Ast *ast, const char *format, ...);

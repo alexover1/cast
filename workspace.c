@@ -137,7 +137,7 @@ void flatten_for_typechecking(Workspace *w, Ast *ast)
             flatten_for_typechecking(w, xx defn->lambda_return_type);
             For (defn->lambda_argument_types) flatten_for_typechecking(w, xx defn->lambda_argument_types[it]);
         }
-        break;
+        return; // Don't add ourselves.
     }
     case AST_TYPE_INSTANTIATION: {
         Ast_Type_Instantiation *inst = xx ast;
@@ -170,6 +170,29 @@ void flatten_for_typechecking(Workspace *w, Ast *ast)
     default: UNREACHABLE;
     }
     arrput(w->infer_queue, ast);
+}
+
+Compiler_Message compiler_next_message(Workspace *w)
+{
+    Compiler_Message result;
+    
+    while (arrlenu(w->infer_queue)) {
+        size_t i = 0;
+        while (i < arrlenu(w->infer_queue)) {
+            Ast *ast = w->infer_queue[i];
+            typecheck_ast(w, ast);
+            if (ast->inferred_type) {
+                arrdelswap(w->infer_queue, i);
+                result.type = MESSAGE_TYPECHECKED;
+                result.typechecked.ast = ast;
+                return result;
+            }
+            i += 1;
+        }
+    }
+
+    result.type = MESSAGE_END;
+    return result;
 }
 
 Workspace create_workspace(const char *name)

@@ -3,3 +3,7 @@ main :: (name: string) -> int {
     if (false) return 420;
 	return 69420;
 }
+
+WIDTH :: 16;
+HEIGHT :: 9;
+FACTOR :: 80;

@@ -46,6 +46,9 @@ typedef uint64_t u64;
 #define Sign(T, x)    ((T)((x) > 0) - (T)((x) < 0))
 #define Abs(T, x)     (Sign(T, x)*(x))
 
+#define Max(T, a, b) ((a > b) ? a : b)
+#define Min(T, a, b) ((a > b) ? b : a)
+
 // AUTOMATIC ITERATION
 
 #define For(xs) for (ptrdiff_t it = 0; it < arrlen((xs)); ++it)

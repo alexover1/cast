@@ -56,6 +56,7 @@ struct Ast_Block {
     Ast_Lambda *belongs_to_lambda;
     Ast_Struct *belongs_to_struct;
     Ast_Enum *belongs_to_enum;
+    bool belongs_to_loop; // for or while
 
     Ast **statements; // @malloced with stb_ds
     Ast_Declaration **declarations;
@@ -304,7 +305,7 @@ void parse_into_block(Parser *p, Ast_Block *block);
 Ast *parse_if_statement(Parser *p);
 Ast *parse_statement(Parser *p);
 
-const Ast_Declaration *find_declaration_if_exists(const Ast_Ident *ident);
+Ast_Declaration *find_declaration_if_exists(const Ast_Ident *ident);
 void checked_add_to_scope(Parser *p, Ast_Block *block, Ast_Declaration *decl);
 
 // File and path-related functions:

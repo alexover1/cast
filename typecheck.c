@@ -34,11 +34,10 @@ bool types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y)
     return false;
 }
 
-bool typecheck_literal(Workspace *w, Ast_Literal *literal)
+void typecheck_literal(Workspace *w, Ast_Literal *literal)
 {
     UNUSED(w);
     literal->base.inferred_type = literal->type;
-    return true;
 }
 
 void typecheck_literal_as_type(Workspace *w, Ast_Literal *literal, Ast_Type_Definition *type_def)
@@ -102,14 +101,21 @@ void typecheck_literal_as_type(Workspace *w, Ast_Literal *literal, Ast_Type_Defi
     return;
 }
 
-bool typecheck_identifier(Workspace *w, Ast_Ident *ident)
+void typecheck_identifier(Workspace *w, Ast_Ident *ident)
 {
     UNUSED(w);
-    UNUSED(ident);
-    return true;
+
+    const Ast_Declaration *resolved_decl = find_declaration_if_exists(ident);
+    if (!resolved_decl) {
+        report_error(&ident->base, "Undeclared identifier '"SV_Fmt"'.", SV_Arg(ident->name));
+    }
+
+    if (!resolved_decl->base.inferred_type) return;
+
+    ident->base.inferred_type = resolved_decl->base.inferred_type;
 }
 
-bool typecheck_unary_operator(Workspace *w, Ast_Unary_Operator *unary)
+void typecheck_unary_operator(Workspace *w, Ast_Unary_Operator *unary)
 {
     UNUSED(w);
     UNUSED(unary);
@@ -117,7 +123,7 @@ bool typecheck_unary_operator(Workspace *w, Ast_Unary_Operator *unary)
 }
 
 // @Cleanup: This whole function's error messages.
-bool typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary)
+void typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary)
 {
     // Check for constant replacement.
     Ast *binary_left = binary->left;
@@ -129,7 +135,7 @@ bool typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary)
     Ast_Type_Definition *left = binary_left->inferred_type;
     Ast_Type_Definition *right = binary_right->inferred_type;
     
-    if (!left || !right) return false; // Waiting...
+    if (!left || !right) return; // Waiting...
 
     switch (binary->operator_type) {
     case TOKEN_ARRAY_SUBSCRIPT:
@@ -140,8 +146,7 @@ bool typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary)
             report_error(&binary->base, "Type mismatch: Cannot compare values of different types (got %s and %s).",
                 type_to_string(left), type_to_string(right));
         }
-        binary->base.inferred_type = left; // Both are the same.
-        return true;
+        break;
     case '>':
     case '<':
     case TOKEN_GREATEREQUALS:
@@ -154,8 +159,7 @@ bool typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary)
             report_error(binary->left, "Type mismatch: Operator '%s' only works on number types (got %s).",
                 token_type_to_string(binary->operator_type), type_to_string(left));
         }
-        binary->base.inferred_type = left; // Both are the same.
-        return true;
+        break;
     case TOKEN_LOGICAL_AND:
     case TOKEN_LOGICAL_OR:
         if (left != w->type_def_bool) {
@@ -166,8 +170,7 @@ bool typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary)
             report_error(binary->right, "Type mismatch: Operator '%s' only works on boolean types (got %s).",
                 token_type_to_string(binary->operator_type), type_to_string(right));
         }
-        binary->base.inferred_type = left; // Both are the same.
-        return true;
+        break;
     case TOKEN_POINTER_DEREFERENCE_OR_SHIFT_LEFT:
     case TOKEN_SHIFT_RIGHT:
         if (!number_flags_is_int(left->number_flags)) {
@@ -176,8 +179,7 @@ bool typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary)
         if (!number_flags_is_int(right->number_flags)) {
             report_error(binary->right, "Type mismatch: Bit shift operators only work on integer types (got %s).", type_to_string(right));
         }
-        binary->base.inferred_type = left;
-        return true;
+        break;
     default:       
         // We let the left type be the determinant.
         binary->base.inferred_type = left;
@@ -187,41 +189,35 @@ bool typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary)
                 report_error(&binary->base, "Type mismatch: Types on either side of '%s' must be the same (got %s and %s).",
                     token_type_to_string(binary->operator_type), type_to_string(left), type_to_string(right));
             }
-            return true;
+            return;
         }
 
         if (left->pointer_to) {
+            if (binary->operator_type != '+' && binary->operator_type != '-') {
+                report_error(&binary->base, "Type mismatch: Operator '%s' does not work on pointers.", token_type_to_string(binary->operator_type));
+            }
+
             // Two possibilities, pointer-pointer and pointer-int.
             if (right->pointer_to) {
                 if (!pointer_types_are_equal(left, right)) {
                     report_error(&binary->base, "Type mismatch: Pointer types on either side of '%s' must be the same (got %s and %s).",
                         token_type_to_string(binary->operator_type), type_to_string(left), type_to_string(right));
                 }
-                return true;
-            }
-
-            if (binary->operator_type != '+' && binary->operator_type != '-') {
-                report_error(&binary->base, "Type mismatch: Operator '%s' does not work on pointers.", token_type_to_string(binary->operator_type));
-            }
-
-            if (!number_flags_is_int(right->number_flags)) {
+            } else if (!number_flags_is_int(right->number_flags)) {
                 if (binary->operator_type == '+') {
                     report_error(&binary->base, "Type mismatch: Can only add integer types to pointers (got %s)", type_to_string(right));
                 } else if (binary->operator_type == '-') {
                     report_error(&binary->base, "Type mismatch: Can only subtract integer types to pointers (got %s)", type_to_string(right));
                 }
             }
-
-            return true;
+            return;
         }
 
         report_error(&binary->base, "Type mismatch: Operator '%s' only works on literal types (got %s).",
             token_type_to_string(binary->operator_type), type_to_string(left));
-
-        return true;
     }
 
-    return true;
+    binary->base.inferred_type = left;
 }
 
 bool typecheck_lambda(Workspace *w, Ast_Lambda *lambda)
@@ -275,43 +271,38 @@ bool typecheck_return(Workspace *w, Ast_Return *ret)
     return true;
 }
 
-bool typecheck_definition(Workspace *w, Ast_Type_Definition *defn)
+void typecheck_definition(Workspace *w, Ast_Type_Definition *defn)
 {
     defn->base.inferred_type = w->type_def_type;
-    return true;
 }
 
-bool typecheck_instantiation(Workspace *w, Ast_Type_Instantiation *inst)
+void typecheck_instantiation(Workspace *w, Ast_Type_Instantiation *inst)
 {
     UNUSED(w);
     UNUSED(inst);
     UNIMPLEMENTED;
 }
 
-bool typecheck_enum(Workspace *w, Ast_Enum *enum_defn)
+void typecheck_enum(Workspace *w, Ast_Enum *enum_defn)
 {
-    UNUSED(w);
-    UNUSED(enum_defn);
-    UNIMPLEMENTED;
+    enum_defn->base.inferred_type = w->type_def_type;
 }
 
-bool typecheck_struct(Workspace *w, Ast_Struct *struct_desc)
+void typecheck_struct(Workspace *w, Ast_Struct *struct_desc)
 {
-    UNUSED(w);
-    UNUSED(struct_desc);
-    UNIMPLEMENTED;
+    struct_desc->base.inferred_type = w->type_def_type;
 }
 
-bool typecheck_using(Workspace *w, Ast_Using *using)
+void typecheck_using(Workspace *w, Ast_Using *using)
 {
     UNUSED(w);
     UNUSED(using);
     UNIMPLEMENTED;
 }
 
-bool typecheck_declaration(Workspace *w, Ast_Declaration *decl)
+void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
 {   
-    if (decl->expression && !decl->expression->inferred_type) return false; // Waiting...
+    if (decl->expression && !decl->expression->inferred_type) return; // Waiting...
     
     if (decl->my_type) {
         if (decl->expression) {
@@ -337,7 +328,7 @@ bool typecheck_declaration(Workspace *w, Ast_Declaration *decl)
             decl->expression = expr;
             decl->expression->inferred_type = decl->my_type;
             decl->base.inferred_type = decl->my_type;
-            return true;
+            return;
         }
 
         // No default value, so create it here.
@@ -358,7 +349,7 @@ bool typecheck_declaration(Workspace *w, Ast_Declaration *decl)
         }
         
         decl->base.inferred_type = decl->my_type;
-        return true;
+        return;
     }
 
     if (!decl->expression) {
@@ -371,39 +362,38 @@ bool typecheck_declaration(Workspace *w, Ast_Declaration *decl)
     
     decl->expression = expr;
     decl->base.inferred_type = expr->inferred_type;
-    return true;
 }
 
-bool typecheck_cast(Workspace *w, Ast_Cast *cast)
+void typecheck_cast(Workspace *w, Ast_Cast *cast)
 {
     UNUSED(w);
     cast->base.inferred_type = cast->type;
-    return true;
 }
 
-bool typecheck_ast(Workspace *w, Ast *ast)
+void typecheck_ast(Workspace *w, Ast *ast)
 {
     while (ast->replacement) ast = ast->replacement;
+    if (ast->inferred_type) return;
     switch (ast->type) {
-    case AST_UNINITIALIZED:   assert(0);
-    case AST_BLOCK:           assert(0);
-    case AST_LITERAL:         return typecheck_literal(w, xx ast);
-    case AST_IDENT:           return typecheck_identifier(w, xx ast);
-    case AST_UNARY_OPERATOR:  return typecheck_unary_operator(w, xx ast);
-    case AST_BINARY_OPERATOR: return typecheck_binary_operator(w, xx ast);
-    case AST_LAMBDA:          return typecheck_lambda(w, xx ast);
-    case AST_PROCEDURE_CALL:  return typecheck_procedure_call(w, xx ast);
-    case AST_WHILE:           return typecheck_while(w, xx ast);
-    case AST_IF:              return typecheck_if(w, xx ast);
-    case AST_LOOP_CONTROL:    assert(0);
-    case AST_RETURN:          return typecheck_return(w, xx ast);
-    case AST_TYPE_DEFINITION: return typecheck_definition(w, xx ast);
-    case AST_TYPE_INSTANTIATION: return typecheck_instantiation(w, xx ast);
-    case AST_ENUM:            return typecheck_enum(w, xx ast);
-    case AST_STRUCT:          return typecheck_struct(w, xx ast);
-    case AST_USING:           return typecheck_using(w, xx ast);
-    case AST_DECLARATION:     return typecheck_declaration(w, xx ast);
-    case AST_CAST:            return typecheck_cast(w, xx ast);
+    case AST_UNINITIALIZED:      assert(0);
+    case AST_BLOCK:              assert(0);
+    case AST_LITERAL:            typecheck_literal(w, xx ast);         break;
+    case AST_IDENT:              typecheck_identifier(w, xx ast);      break;
+    case AST_UNARY_OPERATOR:     typecheck_unary_operator(w, xx ast);  break;
+    case AST_BINARY_OPERATOR:    typecheck_binary_operator(w, xx ast); break;
+    case AST_LAMBDA:             typecheck_lambda(w, xx ast);          break;
+    case AST_PROCEDURE_CALL:     typecheck_procedure_call(w, xx ast);  break;
+    case AST_WHILE:              typecheck_while(w, xx ast);           break;
+    case AST_IF:                 typecheck_if(w, xx ast);              break;
+    case AST_LOOP_CONTROL:       assert(0);
+    case AST_RETURN:             typecheck_return(w, xx ast);          break;
+    case AST_TYPE_DEFINITION:    typecheck_definition(w, xx ast);      break;
+    case AST_TYPE_INSTANTIATION: typecheck_instantiation(w, xx ast);   break;
+    case AST_ENUM:               typecheck_enum(w, xx ast);            break;
+    case AST_STRUCT:             typecheck_struct(w, xx ast);          break;
+    case AST_USING:              typecheck_using(w, xx ast);           break;
+    case AST_DECLARATION:        typecheck_declaration(w, xx ast);     break;
+    case AST_CAST:               typecheck_cast(w, xx ast);            break;
     }
 }
 
