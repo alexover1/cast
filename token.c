@@ -24,7 +24,7 @@ Token find_next_token(Parser *parser); // @Interal
 void parser_next_line(Parser *parser); // @Interal
 Source_Location parser_current_location(Parser *parser); // @Interal
 
-#define parser_current_character_index(parser) ((parser)->current_line.data - (parser)->current_line_start + 1)
+#define parser_current_character_index(parser) ((parser)->current_line.data - (parser)->current_line_start)
 
 static inline int peek_character(Parser *parser)
 {
@@ -118,10 +118,10 @@ static Token_Type parse_keyword_or_ident_token_type(String_View s)
 inline void parser_next_line(Parser *parser)
 {
     parser->current_line = sv_chop_by_delim(&parser->current_input, '\n');
-    parser->current_line = sv_trim_left(parser->current_line); // TODO: if we want to preserve indentation this must be called after arrput.
+    arrput(parser->lines, sv_from_parts(parser->current_line.data, parser->current_line.count + 1)); // Include newline.
     parser->current_line_start = parser->current_line.data;
+    parser->current_line = sv_trim_left(parser->current_line);
     parser->current_line_number += 1;
-    arrput(parser->lines, parser->current_line);
 }
 
 inline Source_Location parser_current_location(Parser *parser)
@@ -155,8 +155,8 @@ Token find_next_token(Parser *parser)
     if (isdigit(c)) {
         String_View literal = sv_chop_left_while(&parser->current_line, continues_identifier);
         token.location.c1 = parser_current_character_index(parser);
-        token.number_flags = 0;
-        if (!parse_int_value(literal, 10, &token.int_value)) {
+        token.number_flags = NUMBER_FLAGS_NUMBER;
+        if (!parse_int_value(literal, 10, &token.integer_value)) {
             parser_report_error(parser, token.location, "Illegal characters in number literal.");
         }
         token.type = TOKEN_NUMBER;
@@ -345,21 +345,106 @@ bool path_file_exist(const char *file_path)
 #endif
 }
 
+inline Token parser_fill_peek_buffer(Parser *parser)
+{
+    assert(parser->peek_count < PARSER_PEEK_CAPACITY); // Peeked too many times.
+    const size_t internal_index = (parser->peek_begin + parser->peek_count) % PARSER_PEEK_CAPACITY;
+    const Token token = find_next_token(parser);
+    parser->peek_buffer[internal_index] = token;
+    parser->peek_count += 1;
+    return token;
+}
+
+inline Token peek_token(Parser *parser, size_t user_index)
+{
+    assert(user_index < PARSER_PEEK_CAPACITY);
+    
+    if (user_index < parser->peek_count) {
+        const size_t internal_index = (parser->peek_begin + user_index) % PARSER_PEEK_CAPACITY;
+        return parser->peek_buffer[internal_index];
+    }
+
+    user_index -= parser->peek_count;
+    while (user_index > 0) parser_fill_peek_buffer(parser);
+    return parser_fill_peek_buffer(parser);
+}
+
 inline Token peek_next_token(Parser *parser)
 {
-    if (parser->peek_full) return parser->peek_token;
-    parser->peek_token = find_next_token(parser);
-    parser->peek_full = true;
-    return parser->peek_token;
+    return peek_token(parser, 0);
 }
 
 inline Token eat_next_token(Parser *parser)
 {
-    if (parser->peek_full) {
-        parser->peek_full = false;
-        return parser->peek_token;
+    if (parser->peek_count == 0) return find_next_token(parser);
+    const size_t internal_index = parser->peek_begin % PARSER_PEEK_CAPACITY;
+    const Token result = parser->peek_buffer[internal_index];
+    parser->peek_begin = (parser->peek_begin + 1) % PARSER_PEEK_CAPACITY;
+    parser->peek_count -= 1;
+    return result;
+}
+
+const char *token_type_to_string(int type)
+{
+    if (type < 256) {
+        return tprint("%c", (char) type);
     }
-    return find_next_token(parser);
+
+    switch (type) {
+    case TOKEN_IDENT: return "identifier";
+    case TOKEN_NUMBER: return "number";
+    case TOKEN_STRING: return "string";
+    case TOKEN_PLUSEQUALS: return "+=";
+    case TOKEN_MINUSEQUALS: return "-=";
+    case TOKEN_TIMESEQUALS: return "*=";
+    case TOKEN_DIVEQUALS: return "/=";
+    case TOKEN_MODEQUALS: return "%=";
+    case TOKEN_ISEQUAL: return "==";
+    case TOKEN_ISNOTEQUAL: return "!=";
+    case TOKEN_LOGICAL_AND: return "&&";
+    case TOKEN_LOGICAL_OR: return "||";
+    case TOKEN_LESSEQUALS: return "<=";
+    case TOKEN_GREATEREQUALS: return ">=";
+
+    case TOKEN_RIGHT_ARROW: return "->";
+    case TOKEN_DOUBLE_DOT: return "..";
+
+    case TOKEN_POINTER_DEREFERENCE_OR_SHIFT_LEFT: return "<<";
+    case TOKEN_SHIFT_RIGHT: return ">>";
+    case TOKEN_BITWISE_AND_EQUALS: return "&=";
+    case TOKEN_BITWISE_OR_EQUALS: return "|=";
+    case TOKEN_BITWISE_XOR_EQUALS: return "^=";
+    
+    case TOKEN_KEYWORD_IF: return "if";
+    case TOKEN_KEYWORD_THEN: return "then";
+    case TOKEN_KEYWORD_ELSE: return "else";
+    // case TOKEN_KEYWORD_CASE: return "case";
+    case TOKEN_KEYWORD_RETURN: return "return";
+    case TOKEN_KEYWORD_STRUCT: return "struct";
+    case TOKEN_KEYWORD_WHILE: return "while";
+    case TOKEN_KEYWORD_BREAK: return "break";
+    case TOKEN_KEYWORD_CONTINUE: return "continue";
+    case TOKEN_KEYWORD_USING: return "using";
+
+    case TOKEN_KEYWORD_DEFER: return "defer";
+    case TOKEN_KEYWORD_SIZE_OF: return "size_of";
+    case TOKEN_KEYWORD_TYPE_OF: return "type_of";
+    case TOKEN_KEYWORD_INITIALIZER_OF: return "initializer_of";
+    case TOKEN_KEYWORD_TYPE_INFO: return "type_info";
+    case TOKEN_KEYWORD_NULL: return "null";
+
+    case TOKEN_KEYWORD_ENUM: return "enum";
+    case TOKEN_KEYWORD_TRUE: return "true";
+    case TOKEN_KEYWORD_FALSE: return "false";
+    case TOKEN_KEYWORD_UNION: return "union";
+
+    case TOKEN_NOTE: return "note";
+    case TOKEN_END_OF_INPUT: return "end of input";
+
+    case TOKEN_ERROR: return "invalid token";
+
+    default: return "**INVALID**";
+    }
 }
 
 // TODO: We should probably support at least UTF-8 at some point.

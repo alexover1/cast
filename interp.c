@@ -4,9 +4,65 @@
 #include "interp.h"
 #include "object.h"
 
-#define INTERP_DO_TRACING
-
 #define xx (void*)
+
+static inline void scope_alloc(Arena *arena, Scope *parent)
+{
+    Scope *result = ast_alloc(arena, sizeof(*result));
+    result->parent = parent;
+    result->members = NULL;
+    shdefault(result->members, 0);
+    return result;
+}
+
+static inline Declaration *scope_find(Scope *scope, const char *key)
+{
+    while (scope) {
+        size_t item = shget(scope->members, key);
+        if (item > 0) return item;
+        scope = scope->parent;
+    }
+    return NULL;
+}
+
+void interp_add_scope(Interp *interp, Scope *parent, const Ast_Block *block)
+{
+    Scope *scope = scope_alloc(&interp->arena, parent);
+    For (block->statements) {
+        // Adding objects in a depth-first order.
+        
+        if (block->statements[it]->type == AST_BLOCK) {
+            interp_add_scope(interp, scope, xx block->statements[it]);
+            continue;
+        }
+
+        // We only care about declarations.
+        
+        if (block->statements[it]->type != AST_DECLARATION) continue;
+
+        const Ast_Declaration *ast = xx block->statements[it];
+
+        // Add inner scopes.
+
+        if (ast->expression->type == AST_TYPE_DEFINITION) {
+            const Ast_Type_Definition *defn = xx ast->expression;
+            if (defn->struct_desc) interp_add_scope(interp, scope, defn->struct_desc->block);
+            if (defn->enum_defn)   interp_add_scope(interp, scope, defn->enum_defn->block);
+        } else if (ast->expression->type == AST_LAMBDA) {
+            const Ast_Lambda *lambda = xx ast->expression;
+            interp_add_scope(interp, lambda->block->parent); // This holds the arguments.
+            interp_add_scope(interp, lambda->block);
+        }
+
+        Declaration decl = {
+            .ast = ast,
+            .enclosing_scope = scope
+        };
+        size_t index = arrlenu(interp->declarations);
+        arrput(interp->declarations, decl);
+        shput(scope->members, ast->ident->key, index);
+    }
+}
 
 static void infer_object(Interp *interp, Object *object)
 {
@@ -25,10 +81,6 @@ static void infer_object(Interp *interp, Object *object)
         if (object->type_value != NULL) {
             // We only want to set the inferred type if we successfully created our type.
             object->inferred_type = interp->type_table.TYPE;
-
-            #if defined(INTERP_DO_TRACING)
-                printf("[defn] "SV_Fmt" :: %s\n", SV_Arg(decl->ident->name), type_to_string(&interp->type_table, object->type_value));
-            #endif
         } 
 
         return;
@@ -248,6 +300,10 @@ Type interp_get_type(Interp *interp, const Ast_Type_Definition *defn)
         UNIMPLEMENTED;
     }
 
+    if (defn->lambda_type) {
+        UNIMPLEMENTED;
+    }
+
     if (defn->type_name) {
         Type type = parse_literal_type(&interp->type_table, defn->type_name->name);
         if (type != NULL) {
@@ -284,10 +340,6 @@ Type interp_get_type(Interp *interp, const Ast_Type_Definition *defn)
         UNIMPLEMENTED;
     }
 
-    if (defn->lambda_argument_types && defn->lambda_return_type) {
-        UNIMPLEMENTED;
-    }
-
     UNREACHABLE;
 }
 
@@ -315,7 +367,8 @@ void interp_add_scope(Interp *interp, const Ast_Block *block)
             if (defn->enum_defn)   interp_add_scope(interp, defn->enum_defn->block);
         } else if (decl->expression->type == AST_LAMBDA) {
             const Ast_Lambda *lambda = xx decl->expression;
-            interp_add_scope(interp, &lambda->body.block);
+            interp_add_scope(interp, lambda->block->parent); // This holds the arguments.
+            interp_add_scope(interp, lambda->block);
         }
         
         Object object = init_object(decl);

@@ -1,321 +1,419 @@
-#include "common.h"
-#include "token.h"
-#include "ast.h"
-#include "type_info.h"
-#include "interp.h"
-#include "parser.h" // parser_report_error()
+#include <stdarg.h>
 
-#define xx (void*)
+#include "typecheck.h"
+#include "workspace.h"
 
-static inline uint64_t log_base_2(uint64_t x)
+#define number_flags_is_int(nf) (((nf)&NUMBER_FLAGS_NUMBER) && !((nf)&NUMBER_FLAGS_FLOAT))
+#define is_integer_type(defn) number_flags_is_int((defn)->number_flags)
+
+#define Replace(ast) do { \
+    if ((ast)->replacement) (ast) = (ast)->replacement; \
+} while(0)
+
+bool pointer_types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y)
 {
-    uint64_t count = 0;
-    while (x >>= 1) {
-        count += 1;
-    }
-    return count;
+    if (x->pointer_level != y->pointer_level) return false;
+    return types_are_equal(x->pointer_to, y->pointer_to);
 }
 
-const Ast_Declaration *find_declaration_or_null(const Ast_Ident *ident)
+bool types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y)
 {
-    const Ast_Block *block = ident->enclosing_block;
-    while (block) {
-        For (block->statements) {
-            if (block->statements[it]->type != AST_DECLARATION) continue;
+    if (x == y) return true;
 
-            const Ast_Declaration *decl = xx block->statements[it];
-            if (sv_eq(decl->ident->name, ident->name)) return decl;
+    if (x->pointer_to && y->pointer_to) return pointer_types_are_equal(x, y);
+
+    if (x->array_element_type && y->array_element_type) {
+        if (x->array_length != y->array_length) return false;
+        return types_are_equal(x->array_element_type, y->array_element_type);
+    }
+
+    // All other types, such as structures and enumerations, can only be compared by pointer.
+    // We do *NOT* do any duck typing or other functional programming strangeness. If you want
+    // "duck" typing, you can use compile-time polymorphism or metaprogramming.
+
+    return false;
+}
+
+bool typecheck_literal(Workspace *w, Ast_Literal *literal)
+{
+    UNUSED(w);
+    literal->base.inferred_type = literal->type;
+    return true;
+}
+
+void typecheck_literal_as_type(Workspace *w, Ast_Literal *literal, Ast_Type_Definition *type_def)
+{
+    if (literal->type == type_def) return;
+    
+    // Integer literals can cast to many other types.
+    if (number_flags_is_int(literal->number_flags)) {
+        // If we are inferred to be some kind of integer type, make sure we fit into that range!
+        if (number_flags_is_int(type_def->number_flags)) {
+            unsigned long low = type_def->number_literal_low->integer_value;
+            unsigned long high = type_def->number_literal_high->integer_value;
+            
+            if (literal->integer_value > high) {
+                report_error(&literal->base, "Numeric constant too big for type (max for %s is %lu).", type_def->literal_name, high);
+            }
+            if (literal->integer_value < low) {
+                report_error(&literal->base, "Numeric constant too small for type (min for %s is %lu).", type_def->literal_name, low);
+            }
+            return;
         }
-        block = block->parent;
-    }
 
-    return NULL;
-}
-
-// x: u8 = 3003;
-
-static inline void report_type_mismatch(Interp *interp, Source_Location location, Type actual, Type expected)
-{
-    parser_report_error(&interp->parser, location, "Type mismatch: Wanted type %s but got type %s.",
-        type_to_string(&interp->type_table, expected),
-        type_to_string(&interp->type_table, actual));
-}
-
-#define INT_OR_FLOAT(tag) ((1<<(tag))&((1 << TYPE_INTEGER) | (1 << TYPE_FLOAT)))
-
-static void check_for_number_literal_overflow(Interp *interp, const Ast_Literal *lit, Type type)
-{
-    if (lit->kind == LITERAL_INT) {
-        uint64_t needed_bits = log_base_2(lit->int_value) + 1;
-
-        printf("%lu needs at least %zu bits.\n", lit->int_value, needed_bits); // @nocheckin
-
-        if (needed_bits > (uint64_t)type->runtime_size) {
-            parser_report_error(&interp->parser, lit->base.location, "Number overflow: Cannot cast %lu into type %s (needs at least %zu bits).",
-                type_to_string(&interp->type_table, type));
+        if (type_def == w->type_def_bool) {
+            if (literal->integer_value > 1) {
+                report_error(&literal->base, "Numeric constant too big for type (max for bool is 1).");
+            }
+            return;
         }
-        return;
     }
 
+    // Strings can cast into array of u8, and integer if they are only 1 character.
+    else if (literal->type == w->type_def_string) {
+        if (is_integer_type(type_def)) {
+            if (literal->string_value.count != 1) {
+                report_error(&literal->base, "Type mismatch: Strings can only be converted into integers if they are exactly 1 character.");
+            }
+            literal->base.replacement = xx make_integer_literal(type_def, *literal->string_value.data);
+            return;
+        } else if (type_def->array_element_type) {
+            if (type_def->array_element_type != w->type_def_u8) {
+                report_error(&literal->base, "Type mismatch: Strings can only be converted into arrays of u8 (got %s).",
+                    type_to_string(type_def->array_element_type));
+            }
+            if (type_def->array_length > 0 && type_def->array_length != (long long)literal->string_value.count) {
+                report_error(&literal->base, "Incorrect array length for string literal (actual %zu).", literal->string_value.count);
+            }
+            return;
+        }
+    }
+
+    else if (literal->type == w->type_def_float) {
+        if (type_def == w->type_def_float32 || type_def == w->type_def_float64) return;
+    }
+
+    else if (literal->type == w->type_def_void_pointer) {
+        if (type_def->pointer_to) return;
+        report_error(&literal->base, "Type mismatch: 'null' can only be applied to pointer types (got %s).", type_to_string(type_def));
+    }
+
+    report_error(&literal->base, "Type mismatch: Wanted %s but got %s.", type_to_string(type_def), type_to_string(literal->type));
+    return;
+}
+
+bool typecheck_identifier(Workspace *w, Ast_Ident *ident)
+{
+    UNUSED(w);
+    UNUSED(ident);
+    return true;
+}
+
+bool typecheck_unary_operator(Workspace *w, Ast_Unary_Operator *unary)
+{
+    UNUSED(w);
+    UNUSED(unary);
     UNIMPLEMENTED;
 }
 
-// Returns a replacement node if it is needed to cast the literal.
-Ast *typecheck_literal(Interp *interp, const Ast_Literal *lit, Type type)
+// @Cleanup: This whole function's error messages.
+bool typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary)
 {
-    switch (lit->kind) {
-    case LITERAL_INT: {
-        size_t mask = (1 << TYPE_INTEGER) | (1 << TYPE_FLOAT) | (1 << TYPE_BOOL);
-        size_t flag = (1 << type->tag);
+    // Check for constant replacement.
+    Ast *binary_left = binary->left;
+    Ast *binary_right = binary->right;
+    Replace(binary_left);
+    Replace(binary_right);
+    
+    // Ensure that both sides of the tree have already been inferred before continuing.
+    Ast_Type_Definition *left = binary_left->inferred_type;
+    Ast_Type_Definition *right = binary_right->inferred_type;
+    
+    if (!left || !right) return false; // Waiting...
 
-        if ((flag&mask) == 0) {
-            report_type_mismatch(interp, lit->base.location, interp->type_table.INT, type);
-            return NULL;
+    switch (binary->operator_type) {
+    case TOKEN_ARRAY_SUBSCRIPT:
+        UNIMPLEMENTED;
+    case TOKEN_ISEQUAL:
+    case TOKEN_ISNOTEQUAL:
+        if (!types_are_equal(left, right)) {
+            report_error(&binary->base, "Type mismatch: Cannot compare values of different types (got %s and %s).",
+                type_to_string(left), type_to_string(right));
         }
+        binary->base.inferred_type = left; // Both are the same.
+        return true;
+    case '>':
+    case '<':
+    case TOKEN_GREATEREQUALS:
+    case TOKEN_LESSEQUALS:
+        if (left != right) {
+            report_error(&binary->base, "Type mismatch: Cannot compare values of different types (got %s and %s).",
+                type_to_string(left), type_to_string(right));
+        }
+        if ((left->number_flags&NUMBER_FLAGS_NUMBER) == 0) {
+            report_error(binary->left, "Type mismatch: Operator '%s' only works on number types (got %s).",
+                token_type_to_string(binary->operator_type), type_to_string(left));
+        }
+        binary->base.inferred_type = left; // Both are the same.
+        return true;
+    case TOKEN_LOGICAL_AND:
+    case TOKEN_LOGICAL_OR:
+        if (left != w->type_def_bool) {
+            report_error(binary->left, "Type mismatch: Operator '%s' only works on boolean types (got %s).",
+                token_type_to_string(binary->operator_type), type_to_string(left));
+        }
+        if (right != w->type_def_bool) {
+            report_error(binary->right, "Type mismatch: Operator '%s' only works on boolean types (got %s).",
+                token_type_to_string(binary->operator_type), type_to_string(right));
+        }
+        binary->base.inferred_type = left; // Both are the same.
+        return true;
+    case TOKEN_POINTER_DEREFERENCE_OR_SHIFT_LEFT:
+    case TOKEN_SHIFT_RIGHT:
+        if (!number_flags_is_int(left->number_flags)) {
+            report_error(binary->left, "Type mismatch: Bit shift operators only work on integer types (got %s).", type_to_string(left));
+        }
+        if (!number_flags_is_int(right->number_flags)) {
+            report_error(binary->right, "Type mismatch: Bit shift operators only work on integer types (got %s).", type_to_string(right));
+        }
+        binary->base.inferred_type = left;
+        return true;
+    default:       
+        // We let the left type be the determinant.
+        binary->base.inferred_type = left;
 
-        if (type->tag == TYPE_BOOL) {
-            Ast_Literal *new_literal = ast_alloc(&interp->parser, lit->base.location, AST_LITERAL, sizeof(*new_literal));
-            new_literal->kind = LITERAL_BOOL;
-            new_literal->bool_value = lit->int_value != 0;
-            return xx new_literal;
-        }
-
-        uint64_t needed_bits = log_base_2(lit->int_value) + 1;
-
-        printf("%lu needs at least %zu bits.\n", lit->int_value, needed_bits); // @nocheckin
-
-        if (needed_bits > (uint64_t)type->runtime_size) {
-            parser_report_error(&interp->parser, lit->base.location, "Number overflow: Cannot cast %lu into type %s (needs at least %zu bits).",
-                type_to_string(&interp->type_table, type));
-        }
-        return NULL;
-    }
-    case LITERAL_FLOAT:
-        if (type != interp->type_table.FLOAT && type != interp->type_table.float64) {
-            report_type_mismatch(interp, lit->base.location, interp->type_table.FLOAT, type);
-        }
-        return NULL;
-    case LITERAL_STRING: {
-        if (lit->string_value.count == 1 && type->tag == TYPE_INTEGER) {
-            Ast_Literal *new_literal = ast_alloc(&interp->parser, lit->base.location, AST_LITERAL, sizeof(*new_literal));
-            new_literal->kind = LITERAL_INT;
-            new_literal->int_value = lit->string_value.data[0];
-            return xx new_literal;
-        }
-        
-        Type_Info_Array array;
-        array.info.tag = TYPE_ARRAY;
-        array.element_type = interp->type_table.u8;
-        array.element_count = -1;
-        if (type != interp->type_table.STRING && !types_are_equal(&interp->type_table, &array.info, type)) {
-            report_type_mismatch(interp, lit->base.location, interp->type_table.STRING, type);
-        }
-        return NULL;
-    }
-    case LITERAL_BOOL:
-        if (type != interp->type_table.BOOL) {
-            report_type_mismatch(interp, lit->base.location, interp->type_table.BOOL, type);
-        }
-        return NULL;
-    case LITERAL_NULL:
-        return NULL; // Null is able to cast to any type.
-    }
-}
-
-Type typecheck_expression(Interp *interp, const Ast *ast)
-{
-    assert(ast);
-
-    switch (ast->type) {     
-    case AST_LITERAL: {
-        const Ast_Literal *lit = xx ast;
-        switch (lit->kind) {
-        case LITERAL_INT:    return interp->type_table.comptime_int;
-        case LITERAL_FLOAT:  return interp->type_table.comptime_float;
-        case LITERAL_STRING: return interp->type_table.comptime_string;
-        case LITERAL_BOOL:   return interp->type_table.BOOL;
-        case LITERAL_NULL:   return interp->type_table.null;
-        }
-    }
-
-    case AST_UNARY_OPERATOR: {
-        const Ast_Unary_Operator *unary = xx ast;
-        Type element_type = typecheck_expression(interp, unary->subexpression);
-        switch (unary->operator_type) {
-        case '-':
-            if (INT_OR_FLOAT(element_type->tag) == 0) {
-                parser_report_error(&interp->parser, ast->location, "Type mismatch: Unary '-' only works on integer and floating-point types, but we got %s.",
-                    type_to_string(&interp->type_table, element_type));
-                return NULL;
+        if (left->number_flags & NUMBER_FLAGS_NUMBER) {
+            if (left != right) {
+                report_error(&binary->base, "Type mismatch: Types on either side of '%s' must be the same (got %s and %s).",
+                    token_type_to_string(binary->operator_type), type_to_string(left), type_to_string(right));
             }
-            if (element_type->tag == TYPE_INTEGER) {
-                Type_Info_Integer *info = xx element_type;
-                if (!info->sign) {
-                    parser_report_error(&interp->parser, ast->location, "Sign mismatch: Unary '-' only works on signed integer types, but we got type '%s'.",
-                        type_to_string(&interp->type_table, element_type));
-                    return NULL;
+            return true;
+        }
+
+        if (left->pointer_to) {
+            // Two possibilities, pointer-pointer and pointer-int.
+            if (right->pointer_to) {
+                if (!pointer_types_are_equal(left, right)) {
+                    report_error(&binary->base, "Type mismatch: Pointer types on either side of '%s' must be the same (got %s and %s).",
+                        token_type_to_string(binary->operator_type), type_to_string(left), type_to_string(right));
+                }
+                return true;
+            }
+
+            if (binary->operator_type != '+' && binary->operator_type != '-') {
+                report_error(&binary->base, "Type mismatch: Operator '%s' does not work on pointers.", token_type_to_string(binary->operator_type));
+            }
+
+            if (!number_flags_is_int(right->number_flags)) {
+                if (binary->operator_type == '+') {
+                    report_error(&binary->base, "Type mismatch: Can only add integer types to pointers (got %s)", type_to_string(right));
+                } else if (binary->operator_type == '-') {
+                    report_error(&binary->base, "Type mismatch: Can only subtract integer types to pointers (got %s)", type_to_string(right));
                 }
             }
-            return element_type;
-        case '!':
-            if (element_type->tag != TYPE_BOOL) {
-                parser_report_error(&interp->parser, ast->location, "Type mismatch: Unary '!' only works on boolean values, but we got %s.",
-                    type_to_string(&interp->type_table, element_type));
-                return NULL;
-            }
-            return element_type; // We know it is bool.
-        case '*':
-            return type_table_append_pointer_to(&interp->type_table, element_type);
-        case TOKEN_BITWISE_NOT:
-            if (element_type->tag != TYPE_INTEGER) {
-                parser_report_error(&interp->parser, ast->location, "Type mismatch: Unary '^' only works on integer values, but we got %s.",
-                    type_to_string(&interp->type_table, element_type));
-                return NULL;
-            }
-            return element_type; // We know it is an integer.
-        case TOKEN_POINTER_DEREFERENCE_OR_SHIFT_LEFT: {
-            if (element_type->tag != TYPE_POINTER) {
-                parser_report_error(&interp->parser, ast->location, "Mismatching levels of indirection: Dereference of non-pointer type %s.",
-                    type_to_string(&interp->type_table, element_type));
-                return NULL;
-            }
-            Type_Info_Pointer *info = xx element_type;
-            if (info->pointer_level > 1) {
-                Type_Info_Pointer copy = *info;
-                copy.pointer_level -= 1;
-                return type_table_append(&interp->type_table, &copy, sizeof(copy));
-            } else {
-                return info->element_type;
-            }
-        }
-        default:
-            assert(0);
-        }
-    }
-    
-    case AST_BINARY_OPERATOR: {
-        const Ast_Binary_Operator *bin = xx ast;
-        Type left = typecheck_expression(interp, bin->left);
-        Type right = typecheck_expression(interp, bin->right);
 
-        assert(left);
-        assert(right);
-
-        if (left != right) {
-            // Move all comptime types to the left so we can go fast by not having duplicate code.
-            if (right == interp->type_table.comptime_int) Swap(Type, left, right);
-            else if (right == interp->type_table.comptime_float) Swap(Type, left, right);
-
-            if (left == interp->type_table.comptime_int && INT_OR_FLOAT(right->tag)) {
-                assert(bin->left->type == AST_LITERAL); // Otherwise how is it comptime_int?
-                check_for_number_literal_overflow(interp, xx bin->left, right);
-                return right;
-            }
-
-            if (left == interp->type_table.comptime_float && INT_OR_FLOAT(right->tag)) return right;
-
-            parser_report_error(&interp->parser, ast->location, "Type mismatch: The types on either side of the binary expression must be the same, but we got %s and %s.",
-                type_to_string(&interp->type_table, left), type_to_string(&interp->type_table, right));
+            return true;
         }
 
-        // Now we know that we have the same type on either side.
+        report_error(&binary->base, "Type mismatch: Operator '%s' only works on literal types (got %s).",
+            token_type_to_string(binary->operator_type), type_to_string(left));
 
-        const Type_Info *type = left;
-
-        // For now, assume all operators work only on int and float.
-        // TODO: logical operators and pointer math
-
-        switch (bin->operator_type) {
-        case '+':
-        case '-':
-        case '*':
-        case '/':
-        case '%':
-        case TOKEN_BITWISE_AND:
-        case TOKEN_BITWISE_OR:
-        case TOKEN_BITWISE_XOR:
-        case TOKEN_POINTER_DEREFERENCE_OR_SHIFT_LEFT:
-        case TOKEN_SHIFT_RIGHT:
-            if (INT_OR_FLOAT(type->tag) == 0) {
-                parser_report_error(&interp->parser, ast->location, "Type mismatch: The binary operator '%s' expects integer or floating-point types, but we got type %s.",
-                    token_type_to_string(bin->operator_type), type_to_string(&interp->type_table, type));
-            }
-            return type;
-        case '>':
-        case '<':
-        case TOKEN_ISEQUAL:
-        case TOKEN_ISNOTEQUAL:
-        case TOKEN_LESSEQUALS:
-        case TOKEN_GREATEREQUALS:
-            if (INT_OR_FLOAT(type->tag) == 0) {
-                parser_report_error(&interp->parser, ast->location, "Type mismatch: The binary operator '%s' expects integer or floating-point types, but we got type %s.",
-                    token_type_to_string(bin->operator_type), type_to_string(&interp->type_table, type));
-            }
-            return interp->type_table.BOOL;
-        default:
-            assert(0);
-        }
-    }
-    
-    case AST_PROCEDURE_CALL: {
-        const Ast_Procedure_Call *call = xx ast;
-        Type type = typecheck_expression(interp, call->procedure_expression);
-
-        assert(type);
-
-        if (type->tag != TYPE_PROCEDURE) {
-            fprintf(stderr, "error: '%s' is not a procedure.\n", ast_to_string((const Ast *)call->procedure_expression));
-            exit(1);
-        }
-        
-        const Type_Info_Procedure *proc = xx type;
-
-        if (arrlenu(call->arguments) != proc->parameter_count) {
-            fprintf(stderr, "error: Incorrect number of arguments to function '%s'.\n",
-                ast_to_string((const Ast *)call->procedure_expression));
-            fprintf(stderr, "info: Expected %zu arguments but got %zu\n", proc->parameter_count, arrlenu(call->arguments));
-            exit(1);
-        }
-
-        For (call->arguments) {
-            Type arg = typecheck_expression(interp, call->arguments[it]);
-            Type par = proc->parameters[it];
-            assert(arg);
-            assert(par);
-            if (!types_are_equal(&interp->type_table, par, arg)) {
-                fprintf(stderr, "error: Parameter %ld of 'print' was expected to be %s but got %s.\n",
-                    it + 1,
-                    type_to_string(&interp->type_table, par),
-                    type_to_string(&interp->type_table, arg));
-                exit(1);
-            }
-        }
-
-        return proc->return_type;
+        return true;
     }
 
-    case AST_IDENT: {
-        const Ast_Ident *ident = xx ast;
-        assert(ident->enclosing_block);
-        const Ast_Declaration *decl = find_declaration_or_null(ident);
-        assert(decl);
-        Object *object = hmgetp_null(interp->objects, decl);
-        assert(object);
-        return object->inferred_type; // Could be null.
-    }
-
-    case AST_TYPE_INSTANTIATION: {
-        const Ast_Type_Instantiation *inst = xx ast;
-        return interp_get_type(interp, inst->type_definition);
-    }
-
-    case AST_TYPE_DEFINITION:
-        return interp->type_table.TYPE;
-
-    case AST_DECLARATION:
-        UNREACHABLE;
-
-    default: UNIMPLEMENTED;
-    }       
+    return true;
 }
 
+bool typecheck_lambda(Workspace *w, Ast_Lambda *lambda)
+{
+    UNUSED(w);
+    lambda->base.inferred_type = lambda->type_definition;
+    return true;
+}
+
+bool typecheck_procedure_call(Workspace *w, Ast_Procedure_Call *call)
+{
+    UNUSED(w);
+    UNUSED(call);
+    UNIMPLEMENTED;
+}
+
+bool typecheck_while(Workspace *w, Ast_While *while_stmt)
+{
+    UNUSED(w);
+    UNUSED(while_stmt);
+    UNIMPLEMENTED;
+}
+
+bool typecheck_if(Workspace *w, Ast_If *if_stmt)
+{
+    if (!if_stmt->condition_expression->inferred_type) return false;
+
+    // TODO: implicit bool conversions.
+
+    if (if_stmt->condition_expression->inferred_type != w->type_def_bool) {
+        report_error(if_stmt->condition_expression, "Condition of 'if' statement must result in a boolean value.");
+    }
+
+    if_stmt->base.inferred_type = w->type_def_void;
+    return true;
+}
+
+bool typecheck_return(Workspace *w, Ast_Return *ret)
+{
+    if (!ret->subexpression->inferred_type) return false;
+    
+    Ast_Type_Definition *expected_type = ret->lambda_i_belong_to->type_definition->lambda_return_type;
+    Ast_Type_Definition *actual_type = ret->subexpression->inferred_type;
+
+    if (!types_are_equal(expected_type, actual_type)) {
+        report_error(&ret->base, "Return type mismatch: Wanted %s but got %s.",
+            type_to_string(expected_type), type_to_string(actual_type));
+    }
+
+    ret->base.inferred_type = w->type_def_void;
+    return true;
+}
+
+bool typecheck_definition(Workspace *w, Ast_Type_Definition *defn)
+{
+    defn->base.inferred_type = w->type_def_type;
+    return true;
+}
+
+bool typecheck_instantiation(Workspace *w, Ast_Type_Instantiation *inst)
+{
+    UNUSED(w);
+    UNUSED(inst);
+    UNIMPLEMENTED;
+}
+
+bool typecheck_enum(Workspace *w, Ast_Enum *enum_defn)
+{
+    UNUSED(w);
+    UNUSED(enum_defn);
+    UNIMPLEMENTED;
+}
+
+bool typecheck_struct(Workspace *w, Ast_Struct *struct_desc)
+{
+    UNUSED(w);
+    UNUSED(struct_desc);
+    UNIMPLEMENTED;
+}
+
+bool typecheck_using(Workspace *w, Ast_Using *using)
+{
+    UNUSED(w);
+    UNUSED(using);
+    UNIMPLEMENTED;
+}
+
+bool typecheck_declaration(Workspace *w, Ast_Declaration *decl)
+{   
+    if (decl->expression && !decl->expression->inferred_type) return false; // Waiting...
+    
+    if (decl->my_type) {
+        if (decl->expression) {
+            if (decl->my_type == w->type_def_void) {
+                report_error(&decl->base, "Cannot assign to void.");
+            }
+
+            // Do constant replacement.
+            Ast *expr = decl->expression;
+            while (expr->replacement) expr = expr->replacement;
+
+            if (expr->type == AST_LITERAL) {
+                typecheck_literal_as_type(w, xx expr, decl->my_type);
+            } else {
+                // Make sure the value fits into the type.
+
+                if (!types_are_equal(decl->my_type, expr->inferred_type)) {
+                    report_error(&decl->base, "Type mismatch: Wanted %s but got %s.",
+                        type_to_string(decl->my_type), type_to_string(expr->inferred_type));
+                }
+            }
+            
+            decl->expression = expr;
+            decl->expression->inferred_type = decl->my_type;
+            decl->base.inferred_type = decl->my_type;
+            return true;
+        }
+
+        // No default value, so create it here.
+        if (decl->my_type->number_flags & NUMBER_FLAGS_NUMBER) {
+            if (decl->my_type->number_flags & NUMBER_FLAGS_FLOAT) {
+                decl->expression = xx make_float_literal(decl->my_type, 0.0);
+            } else {
+                decl->expression = xx make_integer_literal(decl->my_type, 0);
+            }
+        } else if (decl->my_type == w->type_def_bool) {
+            decl->expression = xx make_integer_literal(decl->my_type, 0);
+        } else if (decl->my_type == w->type_def_string) {
+            decl->expression = xx make_string_literal(w, sv_from_parts(NULL, 0));
+        } else if (decl->my_type->pointer_to) {
+            decl->expression = xx make_integer_literal(decl->my_type, 0);
+        } else {
+            assert(0 && "Default values for complex types are not implemented yet.");
+        }
+        
+        decl->base.inferred_type = decl->my_type;
+        return true;
+    }
+
+    if (!decl->expression) {
+        report_error(&decl->base, "Can't have a declaration without a type or a value.");
+    }
+
+    // Do constant replacement.
+    Ast *expr = decl->expression;
+    while (expr->replacement) expr = expr->replacement;
+    
+    decl->expression = expr;
+    decl->base.inferred_type = expr->inferred_type;
+    return true;
+}
+
+bool typecheck_cast(Workspace *w, Ast_Cast *cast)
+{
+    UNUSED(w);
+    cast->base.inferred_type = cast->type;
+    return true;
+}
+
+bool typecheck_ast(Workspace *w, Ast *ast)
+{
+    while (ast->replacement) ast = ast->replacement;
+    switch (ast->type) {
+    case AST_UNINITIALIZED:   assert(0);
+    case AST_BLOCK:           assert(0);
+    case AST_LITERAL:         return typecheck_literal(w, xx ast);
+    case AST_IDENT:           return typecheck_identifier(w, xx ast);
+    case AST_UNARY_OPERATOR:  return typecheck_unary_operator(w, xx ast);
+    case AST_BINARY_OPERATOR: return typecheck_binary_operator(w, xx ast);
+    case AST_LAMBDA:          return typecheck_lambda(w, xx ast);
+    case AST_PROCEDURE_CALL:  return typecheck_procedure_call(w, xx ast);
+    case AST_WHILE:           return typecheck_while(w, xx ast);
+    case AST_IF:              return typecheck_if(w, xx ast);
+    case AST_LOOP_CONTROL:    assert(0);
+    case AST_RETURN:          return typecheck_return(w, xx ast);
+    case AST_TYPE_DEFINITION: return typecheck_definition(w, xx ast);
+    case AST_TYPE_INSTANTIATION: return typecheck_instantiation(w, xx ast);
+    case AST_ENUM:            return typecheck_enum(w, xx ast);
+    case AST_STRUCT:          return typecheck_struct(w, xx ast);
+    case AST_USING:           return typecheck_using(w, xx ast);
+    case AST_DECLARATION:     return typecheck_declaration(w, xx ast);
+    case AST_CAST:            return typecheck_cast(w, xx ast);
+    }
+}
+
+void report_error(Ast *ast, const char *format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    fprintf(stderr, Loc_Fmt ": Error: ", SV_Arg(ast->file_name), Loc_Arg(ast->location));
+    vfprintf(stderr, format, args);
+    fprintf(stderr, "\n");
+    va_end(args);
+    exit(1);
+}

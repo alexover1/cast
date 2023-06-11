@@ -39,6 +39,8 @@ typedef enum {
     TOKEN_BITWISE_AND_EQUALS = 276,
     TOKEN_BITWISE_OR_EQUALS = 277,
     TOKEN_BITWISE_XOR_EQUALS = 278,
+
+    TOKEN_ARRAY_SUBSCRIPT = 279, // Not a token, but needed to work as a binary node in the parse tree.
     
     TOKEN_KEYWORD_IF,
     TOKEN_KEYWORD_THEN,
@@ -74,6 +76,7 @@ const char *token_type_to_string(int type);
 // l0 is the index of the starting line. l1 is the index of the ending line.
 // c0 is the index of the starting character (in bytes). c1 is the index of
 // the ending character.
+// @Volatile: These are all 0-based, because we're true programmers.
 typedef struct {
     int l0, l1; // line range
     int c0, c1; // character range
@@ -85,15 +88,15 @@ typedef struct {
 #define Loc_Fmt SV_Fmt"%s:%d,%d"
 #endif
 
-#define Loc_Arg(loc) (loc).l0, (loc).c0
+#define Loc_Arg(loc) (loc).l0+1, (loc).c0+1
 
 typedef struct {
     int type;
-    Source_Location location; // I wish we had using...
+    Source_Location location;
     
     union {
-        uint64_t int_value;
-        float float_value;
+        unsigned long integer_value;
+        double double_value;
         String_View string_value; // Must be copied to save in AST.
     };
 
@@ -101,8 +104,9 @@ typedef struct {
 } Token;
 
 enum {
-    NUMBER_IS_BINARY_LITERAL = 0x1,
-    NUMBER_IS_HEX_LITERAL = 0x2,
-    // NUMBER_IS_OCTAL_LITERAL = 0x4,
-    NUMBER_IS_FLOAT = 0x8, // TODO: Not sure about how we want int/float to work...
+    NUMBER_FLAGS_BINARY = 0x1,
+    NUMBER_FLAGS_HEX = 0x2,
+    NUMBER_FLAGS_NUMBER = 0x4, // So that zero'd flags is not a number.
+    NUMBER_FLAGS_FLOAT = 0x8,
+    NUMBER_FLAGS_DOUBLE = 0x10,
 };

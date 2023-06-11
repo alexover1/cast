@@ -1,3 +1,5 @@
-my_name := "Jon";
-x := 5;
-return x;
+main :: (name: string) -> int {
+    if (true) return 69;
+    if (false) return 420;
+	return 69420;
+}

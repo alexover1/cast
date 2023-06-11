@@ -10,6 +10,9 @@
 
 extern Arena *context_arena;
 
+#define Push_Arena(new) Arena *__saved_context_arena = context_arena; context_arena = (new)
+#define Pop_Arena() context_arena = __saved_context_arena
+
 void *context_alloc(size_t size);
 void *context_realloc(void *oldptr, size_t oldsz, size_t newsz);
 
@@ -19,12 +22,6 @@ extern Arena temporary_arena;
 
 char *tprint(const char *fmt, ...);
 char *vtprint(const char *fmt, va_list args);
-
-// LOGGING
-
-typedef int (*fprintf_t) (FILE *stream, const char *format, ...);
-
-extern fprintf_t context_logger;
 
 #endif // CONTEXT_ALLOC_H_
 

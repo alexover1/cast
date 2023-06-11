@@ -6,8 +6,6 @@
 #include "type_info.h"
 #include "vendor/stb_ds.h"
 
-#define xx (void *)
-
 const char *type_to_string(const Type_Table *table, const Type_Info *type)
 {
     if (type == NULL) return "**NULL**";
@@ -92,69 +90,6 @@ const char *type_to_string(const Type_Table *table, const Type_Info *type)
     }
 }
 
-const char *token_type_to_string(int type)
-{
-    if (type < 256) {
-        return tprint("%c", (char) type);
-    }
-
-    switch (type) {
-    case TOKEN_IDENT: return "identifier";
-    case TOKEN_NUMBER: return "number";
-    case TOKEN_STRING: return "string";
-    case TOKEN_PLUSEQUALS: return "+=";
-    case TOKEN_MINUSEQUALS: return "-=";
-    case TOKEN_TIMESEQUALS: return "*=";
-    case TOKEN_DIVEQUALS: return "/=";
-    case TOKEN_MODEQUALS: return "%=";
-    case TOKEN_ISEQUAL: return "==";
-    case TOKEN_ISNOTEQUAL: return "!=";
-    case TOKEN_LOGICAL_AND: return "&&";
-    case TOKEN_LOGICAL_OR: return "||";
-    case TOKEN_LESSEQUALS: return "<=";
-    case TOKEN_GREATEREQUALS: return ">=";
-
-    case TOKEN_RIGHT_ARROW: return "->";
-    case TOKEN_DOUBLE_DOT: return "..";
-
-    case TOKEN_POINTER_DEREFERENCE_OR_SHIFT_LEFT: return "<<";
-    case TOKEN_SHIFT_RIGHT: return ">>";
-    case TOKEN_BITWISE_AND_EQUALS: return "&=";
-    case TOKEN_BITWISE_OR_EQUALS: return "|=";
-    case TOKEN_BITWISE_XOR_EQUALS: return "^=";
-    
-    case TOKEN_KEYWORD_IF: return "if";
-    case TOKEN_KEYWORD_THEN: return "then";
-    case TOKEN_KEYWORD_ELSE: return "else";
-    // case TOKEN_KEYWORD_CASE: return "case";
-    case TOKEN_KEYWORD_RETURN: return "return";
-    case TOKEN_KEYWORD_STRUCT: return "struct";
-    case TOKEN_KEYWORD_WHILE: return "while";
-    case TOKEN_KEYWORD_BREAK: return "break";
-    case TOKEN_KEYWORD_CONTINUE: return "continue";
-    case TOKEN_KEYWORD_USING: return "using";
-
-    case TOKEN_KEYWORD_DEFER: return "defer";
-    case TOKEN_KEYWORD_SIZE_OF: return "size_of";
-    case TOKEN_KEYWORD_TYPE_OF: return "type_of";
-    case TOKEN_KEYWORD_INITIALIZER_OF: return "initializer_of";
-    case TOKEN_KEYWORD_TYPE_INFO: return "type_info";
-    case TOKEN_KEYWORD_NULL: return "null";
-
-    case TOKEN_KEYWORD_ENUM: return "enum";
-    case TOKEN_KEYWORD_TRUE: return "true";
-    case TOKEN_KEYWORD_FALSE: return "false";
-    case TOKEN_KEYWORD_UNION: return "union";
-
-    case TOKEN_NOTE: return "note";
-    case TOKEN_END_OF_INPUT: return "end of input";
-
-    case TOKEN_ERROR: return "invalid token";
-
-    default: return "**INVALID**";
-    }
-}
-
 const char *ast_to_string(const Ast *ast)
 {
     if (ast == NULL) return "**NULL**";
@@ -215,6 +150,10 @@ const char *ast_to_string(const Ast *ast)
                 return tprint("enum %s", ast_to_string(xx defn->enum_defn->block));
             }
 
+            if (defn->lambda_type) {
+                return ast_to_string(xx defn->lambda_type);
+            }
+
             if (defn->type_name) return ast_to_string(xx defn->type_name);
 
             if (defn->array_element_type) {
@@ -226,23 +165,7 @@ const char *ast_to_string(const Ast *ast)
                 return tprint("%.*s%s", defn->pointer_level, "**********", ast_to_string(xx defn->pointer_to));
             }
 
-            assert(defn->lambda_return_type);
-            
-            Arena *saved = context_arena;
-            context_arena = &temporary_arena;
-
-            String_Builder sb = {0};
-            sb_append_cstr(&sb, "(");
-
-            For (defn->lambda_argument_types) {
-                if (it > 0) sb_append_cstr(&sb, ", ");
-                sb_append_cstr(&sb, ast_to_string(xx defn->lambda_argument_types[it]));
-            }
-            
-            sb_print(&sb, ") -> %s", ast_to_string(xx defn->lambda_return_type));
-
-            context_arena = saved;
-            return sb.data;
+            return "";
         }
 
         case AST_TYPE_INSTANTIATION: {
@@ -300,14 +223,29 @@ const char *ast_to_string(const Ast *ast)
             return tprint("return %s", ast_to_string(ret->subexpression));
         }
 
-        case AST_LAMBDA_BODY: {
-            const Ast_Lambda_Body *body = xx ast;
-            return ast_to_string(&body->block.base);
+        case AST_LAMBDA_TYPE: {
+            const Ast_Lambda_Type *lambda_type = xx ast;
+
+            Arena *saved = context_arena;
+            context_arena = &temporary_arena;
+
+            String_Builder sb = {0};
+            sb_append_cstr(&sb, "(");
+
+            For (lambda_type->argument_types) {
+                if (it > 0) sb_append_cstr(&sb, ", ");
+                sb_append_cstr(&sb, ast_to_string(xx lambda_type->argument_types[it]));
+            }
+        
+            sb_print(&sb, ") -> %s", ast_to_string(xx lambda_type->return_type));
+
+            context_arena = saved;
+            return sb.data;
         }
 
         case AST_LAMBDA: {
             const Ast_Lambda *lambda = xx ast;
-            return tprint("%s %s", ast_to_string(xx lambda->type_definition), ast_to_string(xx &lambda->body));
+            return tprint("%s %s", ast_to_string(xx lambda->type_definition), ast_to_string(xx lambda->block));
         }
 
         case AST_DECLARATION: {

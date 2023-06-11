@@ -4,6 +4,8 @@
 #include <stdlib.h> // for abort?
 #include <stdint.h>
 
+#define xx (void*)
+
 // INTEGER TYPES
 
 typedef int8_t s8;

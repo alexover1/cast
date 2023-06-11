@@ -2,22 +2,13 @@
 #include <string.h> // strerror
 #include <stdlib.h> // exit
 
-#include <llvm-c/Core.h>
-#include <llvm-c/Target.h>
-
-#include "common.h"
-#include "vendor/arena.h"
-#include "vendor/stb_ds.h"
-#include "ast.h"
 #include "parser.h"
-#include "interp.h"
-
-#include "object.h"
+#include "workspace.h"
+#include "typecheck.h"
 
 Arena temporary_arena = {0};
 Arena general_arena = {0};
 Arena *context_arena = &general_arena;
-fprintf_t context_logger = fprintf;
 
 Ast_Ident make_identifier(const char *name, Ast_Block *enclosing_block);
 
@@ -31,41 +22,19 @@ int main(int argc, char **argv)
         exit(1);
     }
 
-    String_View input_file_path = sv_from_cstr(shift_args(&argc, &argv));
+    const char *input_path = shift_args(&argc, &argv);
 
-    if (!path_file_exist(input_file_path.data)) {
-        fprintf(stderr, "File '%s' is not a regular file or does not exist\n", input_file_path.data);
-        exit(1);
+    Workspace w0 = create_workspace("My Program");
+    workspace_add_file(&w0, input_path);
+    // workspace_run(&w0);
+
+    String_View file_name = path_get_file_name(input_path);
+    For (w0.infer_queue) {
+        Ast *ast = w0.infer_queue[it];
+        typecheck_ast(&w0, ast);
+        printf(Loc_Fmt ": %s (%s)\n", SV_Arg(file_name), Loc_Arg(ast->location),
+            ast_type_to_string(ast->type), type_to_string(ast->inferred_type));
     }
-
-    String_View input;
-    int err = arena_slurp_file(context_arena, input_file_path, &input);
-    if (err != 0) {
-        fprintf(stderr, "System error while reading input file '%s': %s\n", input_file_path.data, strerror(errno));
-        exit(1);
-    }
-
-    String_View input_file_name = path_get_file_name(input_file_path.data);
-
-    Interp interp = init_interp(arena_sv_to_cstr(&temporary_arena, input_file_name));
-    interp.parser.arena = &interp.arena; // TODO: This should be set somehow automatically.
-    parser_init(&interp.parser, input, input_file_name, input_file_path);
-
-    // while (1) {
-    //     Token token = eat_next_token(&interp.parser);
-    //     if (token.type == TOKEN_END_OF_INPUT) break;
-    //     printf(Loc_Fmt": %s (end = %d)\n", SV_Arg(input_file_path), Loc_Arg(token.location), token_type_to_string(token.type), token.location.c1);
-    // }
-
-    Ast_Block *block = parse_toplevel(&interp.parser);
-    printf("--- The block has %ld statement(s). ---\n", arrlen(block->statements));
-    For (block->statements) {
-        printf("%s\n", ast_to_string(block->statements[it]));
-    }
-
-    interp_add_scope(&interp, block);
-    interp_prepare_llvm_context(&interp);
-    interp_run_main_loop(&interp);
 
     arena_free(&temporary_arena);
     return 0;

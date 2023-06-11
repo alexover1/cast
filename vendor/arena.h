@@ -71,7 +71,7 @@ void arena_summary(Arena *a);
 
 #include "sv.h"
 
-int arena_slurp_file(Arena *arena, String_View file_path, String_View *content);
+int arena_slurp_file(Arena *arena, const char *file_path, String_View *content);
 String_View arena_sv_concat(Arena *arena, ...);
 const char *arena_cstr_concat(Arena *arena, ...);
 const char *arena_sv_to_cstr(Arena *arena, String_View sv);
@@ -232,11 +232,9 @@ String_View arena_sv_concat(Arena *arena, ...)
 
 #if ARENA_BACKEND == ARENA_BACKEND_LIBC_MALLOC
 
-int arena_slurp_file(Arena *arena, String_View file_path, String_View *content)
+int arena_slurp_file(Arena *arena, const char *file_path, String_View *content)
 {
-    const char *file_path_cstr = arena_sv_to_cstr(arena, file_path);
-
-    FILE *f = fopen(file_path_cstr, "rb");
+    FILE *f = fopen(file_path, "rb");
     if (f == NULL) {
         return -1;
     }

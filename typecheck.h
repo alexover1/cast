@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "parser.h"
+
 typedef enum {
     TYPE_INTEGER = 1,
     TYPE_FLOAT = 2,
@@ -62,22 +64,14 @@ typedef struct {
     int64_t element_count; // -1 for slice
 } Type_Info_Array;
 
-typedef struct {
-    Arena arena;
-    Type *types; // @malloced with stb_ds
+bool types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y);
+bool pointer_types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y);
 
-    Type INT, FLOAT, BOOL, VOID, STRING;
-    Type TYPE, CODE, null;
-    Type s8, s16, s32, s64;
-    Type u8, u16, u32, u64;
-    Type float64;
-    Type AUTOCAST;
-    Type comptime_int, comptime_float, comptime_string; // TODO: maybe add an AUTOCAST type?
-} Type_Table;
+bool typecheck_literal(Workspace *w, Ast_Literal *literal);
+void typecheck_literal_as_type(Workspace *w, Ast_Literal *literal, Ast_Type_Definition *type_def);
+bool typecheck_identifier(Workspace *w, Ast_Ident *ident);
+bool typecheck_unary_operator(Workspace *w, Ast_Unary_Operator *unary);
+bool typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary);
+bool typecheck_ast(Workspace *w, Ast *ast);
 
-Type_Table type_table_init(void);
-Type parse_literal_type(const Type_Table *table, String_View lit);
-Type type_table_append_pointer_to(Type_Table *table, Type element_type);
-Type type_table_append(Type_Table *table, void *item, size_t item_size);
-const char *type_to_string(const Type_Table *table, Type type);
-bool types_are_equal(const Type_Table *table, Type a, Type b);
+void report_error(Ast *ast, const char *format, ...);
