@@ -23,22 +23,15 @@ int main(int argc, char **argv)
     }
 
     const char *input_path = shift_args(&argc, &argv);
-    String_View file_name = path_get_file_name(input_path);
 
     Workspace w0 = create_workspace("My Program");
     workspace_add_file(&w0, input_path);
-    // workspace_run(&w0);
+    workspace_typecheck(&w0);
+    workspace_setup_llvm(&w0);
+    workspace_llvm(&w0);
 
-    while (1) {
-        Compiler_Message message = compiler_next_message(&w0);
-        if (message.type == MESSAGE_END) break;
-
-        if (message.type == MESSAGE_TYPECHECKED) {
-            Ast *ast = message.typechecked.ast;
-            printf("[TYPECHECKED]: "Loc_Fmt ": %s (%s)\n", SV_Arg(file_name), Loc_Arg(ast->location),
-                ast_type_to_string(ast->type), type_to_string(ast->inferred_type));
-        }
-    }
+    LLVMDumpModule(w0.llvm.module);
+    workspace_dispose_llvm(&w0);
 
     arena_free(&temporary_arena);
     return 0;

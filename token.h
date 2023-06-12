@@ -109,4 +109,5 @@ enum {
     NUMBER_FLAGS_NUMBER = 0x4, // So that zero'd flags is not a number.
     NUMBER_FLAGS_FLOAT = 0x8,
     NUMBER_FLAGS_DOUBLE = 0x10,
+    NUMBER_FLAGS_SIGNED = 0x20,
 };

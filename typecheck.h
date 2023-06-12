@@ -64,6 +64,8 @@ typedef struct {
     int64_t element_count; // -1 for slice
 } Type_Info_Array;
 
+void flatten_for_typechecking(Workspace *w, Ast *ast);
+
 bool types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y);
 bool pointer_types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y);
 

@@ -52,6 +52,7 @@ typedef uint64_t u64;
 // AUTOMATIC ITERATION
 
 #define For(xs) for (ptrdiff_t it = 0; it < arrlen((xs)); ++it)
+#define For_(xs) for (ptrdiff_t it_index = 0; it_index < arrlen((xs)); ++it_index)
 
 // BITWISE FLAGS
 

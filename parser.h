@@ -3,6 +3,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <llvm-c/Core.h>
+
 #include "common.h"
 #include "token.h"
 #include "vendor/arena.h"
@@ -166,9 +168,11 @@ struct Ast_Type_Definition {
 typedef struct {
     Ast base;
 
+    const char *name;
     Ast_Type_Definition *type_definition;
-    Ast **argument_list;
-    // Ast *initializer_expression;
+    Ast *initializer_expression;
+
+    LLVMValueRef llvm_value;
 } Ast_Type_Instantiation;
 
 struct Ast_Struct {
@@ -188,6 +192,7 @@ struct Ast_Enum {
 struct Ast_Lambda {
     Ast base;
 
+    String_View name;
     Ast_Type_Definition *type_definition;
     Ast_Block *block; // block->parent == arguments_block
 };
@@ -216,6 +221,8 @@ struct Ast_Declaration {
     Ast_Type_Definition *my_type;
     Ast *expression;
     Ast_Block *block; // If this declaration owns a block.
+
+    LLVMValueRef llvm_value;
 
     unsigned int flags;
 };
@@ -262,13 +269,18 @@ typedef struct {
     // Stuff for parsing:
 
     Workspace *workspace;
-    Ast_Block *block;
+    Ast_Block *current_block;
+    Ast_Lambda *current_lambda;
+    Ast *current_loop; // Points at either Ast_While or Ast_For.
 } Parser;
 
 void *ast_alloc(Parser *p, Source_Location loc, Ast_Type type, size_t size);
 const char *ast_type_to_string(Ast_Type type);
-const char *ast_to_string(const Ast *ast);
 const char *type_to_string(Ast_Type_Definition *defn);
+
+char *ast_to_string(Ast *ast);
+void dump_ast(Ast *ast);
+void print_ast_to_builder(String_Builder *sb, Ast *ast, size_t indent);
 
 // Lexing:
 

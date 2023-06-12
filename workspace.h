@@ -15,7 +15,8 @@ typedef struct {
 struct Workspace {
     const char *name;
     Llvm llvm;
-    Ast **infer_queue;
+    Ast_Declaration **declarations;
+    Ast **typecheck_queue;
 
     Ast_Literal *literal_true;
     Ast_Literal *literal_false;
@@ -43,54 +44,17 @@ struct Workspace {
 Workspace create_workspace(const char *name);
 void workspace_add_file(Workspace *w, const char *path_as_cstr);
 void workspace_add_string(Workspace *w, String_View input);
-void workspace_run(Workspace *w);
-
-// Messaging:
-
-typedef enum {
-    MESSAGE_END = 0,
-    MESSAGE_TYPECHECKED = 1,
-    MESSAGE_BYTECODED = 2,
-    MESSAGE_LLVMED = 3,
-} Compiler_Message_Type;
-
-typedef struct {
-    Ast *ast;
-} Compiler_Message_Typechecked;
-
-typedef struct {
-    Ast *ast;
-    // Bytecode bytecode;
-} Compiler_Message_Bytecoded;
-
-typedef struct {
-    Ast *ast;
-    LLVMTypeRef type;
-    LLVMValueRef value;
-    // Bytecode bytecode;
-} Compiler_Message_Llvmed;
-
-typedef struct {
-    Compiler_Message_Type type;
-    union {
-        Compiler_Message_Typechecked typechecked;
-        Compiler_Message_Bytecoded bytecoded;
-        Compiler_Message_Llvmed llvmed;
-    };
-} Compiler_Message;
-
-Compiler_Message compiler_next_message(Workspace *workspace);
-
-// Type checking:
-
-void flatten_for_typechecking(Workspace *w, Ast *ast);
+void workspace_typecheck(Workspace *w);
+void workspace_llvm(Workspace *w);
 
 // LLVM stuff:
 
 void workspace_setup_llvm(Workspace *w);
+void workspace_dispose_llvm(Workspace *w);
 LLVMValueRef llvm_const_string(Llvm llvm, const char *data, size_t count);
-LLVMTypeRef llvm_create_type(Llvm llvm, Ast_Type_Definition *type_def);
-LLVMValueRef llvm_create_value(Llvm llvm, LLVMTypeRef type, const Ast *ast);
+LLVMValueRef llvm_get_named_value(LLVMValueRef function, const char *name);
+LLVMTypeRef llvm_create_type(Workspace *w, const Ast_Type_Definition *type_def);
+LLVMValueRef llvm_build_value(Workspace *w, LLVMValueRef function, Ast *ast);
 
 // Random helper functions
 

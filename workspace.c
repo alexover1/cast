@@ -69,130 +69,43 @@ Ast_Literal *make_string_literal(Workspace *w, String_View value)
     return literal;
 }
 
-void flatten_for_typechecking(Workspace *w, Ast *ast)
+void workspace_typecheck(Workspace *w)
 {
-    if (ast == NULL) return;
-    switch (ast->type) {
-    case AST_BLOCK: {
-        Ast_Block *block = xx ast;
-        For (block->statements) flatten_for_typechecking(w, block->statements[it]);
-        return; // So we don't get added.
-    }
-    case AST_LITERAL:
-        return; // No need to typecheck.
-    case AST_IDENT:
-        break;
-    case AST_UNARY_OPERATOR: {
-        Ast_Unary_Operator *unary = xx ast;
-        flatten_for_typechecking(w, unary->subexpression);
-        break;
-    }
-    case AST_BINARY_OPERATOR: {
-        Ast_Binary_Operator *binary = xx ast;
-        flatten_for_typechecking(w, binary->left);
-        flatten_for_typechecking(w, binary->right);
-        break;
-    }
-    case AST_LAMBDA: {
-        Ast_Lambda *lambda = xx ast;
-        flatten_for_typechecking(w, xx lambda->type_definition);
-        flatten_for_typechecking(w, xx lambda->block);
-        break;
-    }
-    case AST_PROCEDURE_CALL: {
-        Ast_Procedure_Call *call = xx ast;
-        flatten_for_typechecking(w, call->procedure_expression);
-        For (call->arguments) flatten_for_typechecking(w, call->arguments[it]);
-        break;
-    }
-    case AST_WHILE: {
-        Ast_While *while_stmt = xx ast;
-        flatten_for_typechecking(w, while_stmt->condition_expression);
-        flatten_for_typechecking(w, while_stmt->then_statement);
-        break;
-    }
-    case AST_IF: {
-        Ast_If *if_stmt = xx ast;
-        flatten_for_typechecking(w, if_stmt->condition_expression);
-        flatten_for_typechecking(w, if_stmt->then_statement);
-        if (if_stmt->else_statement) flatten_for_typechecking(w, if_stmt->else_statement);
-        break;
-    }
-    case AST_LOOP_CONTROL:
-        break;
-    case AST_RETURN: {
-        Ast_Return *ret = xx ast;
-        flatten_for_typechecking(w, ret->subexpression);
-        break;
-    }
-    case AST_TYPE_DEFINITION: {
-        Ast_Type_Definition *defn = xx ast;
-        if (defn->struct_desc)        flatten_for_typechecking(w, xx defn->struct_desc);
-        if (defn->enum_defn)          flatten_for_typechecking(w, xx defn->enum_defn);
-        if (defn->type_name)          flatten_for_typechecking(w, xx defn->type_name);
-        if (defn->struct_call)        flatten_for_typechecking(w, xx defn->struct_call);
-        if (defn->array_element_type) flatten_for_typechecking(w, xx defn->array_element_type);
-        if (defn->pointer_to)         flatten_for_typechecking(w, xx defn->pointer_to);
-        if (defn->lambda_return_type) {
-            flatten_for_typechecking(w, xx defn->lambda_return_type);
-            For (defn->lambda_argument_types) flatten_for_typechecking(w, xx defn->lambda_argument_types[it]);
-        }
-        return; // Don't add ourselves.
-    }
-    case AST_TYPE_INSTANTIATION: {
-        Ast_Type_Instantiation *inst = xx ast;
-        flatten_for_typechecking(w, xx inst->type_definition);
-        For (inst->argument_list) flatten_for_typechecking(w, inst->argument_list[it]);
-        break;
-    }
-    case AST_ENUM: {
-        Ast_Enum *enum_defn = xx ast;
-        // flatten_for_typechecking(array, xx enum_defn->underlying_int_type);
-        flatten_for_typechecking(w, xx enum_defn->block);
-        break;
-    }
-    case AST_STRUCT: {
-        Ast_Struct *struct_desc = xx ast;
-        flatten_for_typechecking(w, xx struct_desc->block);
-        break;
-    }
-    case AST_DECLARATION: {
-        Ast_Declaration *decl = xx ast;
-        flatten_for_typechecking(w, xx decl->my_type);
-        flatten_for_typechecking(w, xx decl->expression);
-        break;
-    }
-    case AST_USING: {
-        Ast_Using *using = xx ast;
-        flatten_for_typechecking(w, using->subexpression);
-        break;
-    }
-    default: UNREACHABLE;
-    }
-    arrput(w->infer_queue, ast);
-}
-
-Compiler_Message compiler_next_message(Workspace *w)
-{
-    Compiler_Message result;
-    
-    while (arrlenu(w->infer_queue)) {
+    while (arrlenu(w->typecheck_queue)) {
         size_t i = 0;
-        while (i < arrlenu(w->infer_queue)) {
-            Ast *ast = w->infer_queue[i];
+        while (i < arrlenu(w->typecheck_queue)) {
+            Ast *ast = w->typecheck_queue[i];
             typecheck_ast(w, ast);
             if (ast->inferred_type) {
-                arrdelswap(w->infer_queue, i);
-                result.type = MESSAGE_TYPECHECKED;
-                result.typechecked.ast = ast;
-                return result;
+                arrdelswap(w->typecheck_queue, i);
+            } else {
+                i += 1;
             }
-            i += 1;
         }
     }
+}
 
-    result.type = MESSAGE_END;
-    return result;
+void workspace_llvm(Workspace *w)
+{
+    For_ (w->declarations) {
+        Ast_Declaration *it = w->declarations[it_index];
+
+        if (it->llvm_value) continue;
+
+        printf("---------------------------------\n");
+        dump_ast(xx it);
+        printf("---------------------------------\n");
+
+        assert(it->expression);
+
+        if (it->flags & DECLARATION_IS_CONSTANT) {
+            llvm_build_value(w, NULL, it->expression);
+            // printf("##################################\n");
+            // LLVMDumpValue(value);
+            // printf("\n");
+            // printf("##################################\n");
+        }
+    }
 }
 
 Workspace create_workspace(const char *name)
@@ -200,7 +113,8 @@ Workspace create_workspace(const char *name)
     Workspace workspace;
     workspace.name = name;
     workspace.llvm = (Llvm){0};
-    workspace.infer_queue = NULL;
+    workspace.declarations = NULL;
+    workspace.typecheck_queue = NULL;
 
     // Create type definitions for built-in types.
     workspace.type_def_int = make_integer_type_leaf("int", 8, LLONG_MIN, LLONG_MAX);
@@ -212,6 +126,11 @@ Workspace create_workspace(const char *name)
     workspace.type_def_s16 = make_integer_type_leaf("s16", 2, SHRT_MIN,  SHRT_MAX);
     workspace.type_def_s32 = make_integer_type_leaf("s32", 4, INT_MIN,   INT_MAX);
     workspace.type_def_s64 = make_integer_type_leaf("s64", 8, LLONG_MIN, LLONG_MAX);
+
+    workspace.type_def_s8->number_flags |= NUMBER_FLAGS_SIGNED;
+    workspace.type_def_s16->number_flags |= NUMBER_FLAGS_SIGNED;
+    workspace.type_def_s32->number_flags |= NUMBER_FLAGS_SIGNED;
+    workspace.type_def_s64->number_flags |= NUMBER_FLAGS_SIGNED;
     
     workspace.type_def_float = make_type_leaf("float", 4);
     workspace.type_def_float->number_flags = NUMBER_FLAGS_NUMBER | NUMBER_FLAGS_FLOAT;

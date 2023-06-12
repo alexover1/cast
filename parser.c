@@ -7,21 +7,23 @@
 #include "parser.h"
 #include "workspace.h"
 
-#define Enter_Block(parser, the_block) do { \
-    (the_block)->parent = (parser)->block;  \
-    (parser)->block = (the_block);          \
+#define Enter_Block(parser, the_block) do {        \
+    (the_block)->parent = (parser)->current_block; \
+    (parser)->current_block = (the_block);         \
 } while (0);
 
-// Note: We don't use the_block_to_exit but I like to pass it so I can see what block I'm exiting at the callsite.
-#define Exit_Block(parser, the_block_to_exit) do { \
-    (parser)->block = (parser)->block->parent; \
+// Note: We don't use the_block but I like to pass it so I can see what block I'm exiting at the callsite.
+#define Exit_Block(parser, the_block) do {                     \
+    (parser)->current_block = (parser)->current_block->parent; \
 } while (0);
 
 static inline Ast_Ident *make_identifier(Parser *p, Token token)
 {
+    // We copy the name but append a '\0' so it can be a c-string for LLVM.
     Ast_Ident *ident = ast_alloc(p, token.location, AST_IDENT, sizeof(*ident));
-    ident->name = arena_sv_copy(context_arena, token.string_value);
-    ident->enclosing_block = p->block;
+    ident->name.data = arena_sv_to_cstr(context_arena, token.string_value);
+    ident->name.count = token.string_value.count;
+    ident->enclosing_block = p->current_block;
     return ident;
 }
 
@@ -335,12 +337,18 @@ Ast *parse_lambda_type_or_definition(Parser *p)
     token = peek_next_token(p);
     if (token.type == '{') {
         eat_next_token(p);
+        Ast_Lambda *previous_lambda = p->current_lambda;
+        
         Ast_Lambda *lambda = ast_alloc(p, type_definition->base.location, AST_LAMBDA, sizeof(*lambda));
         lambda->type_definition = type_definition;
         lambda->block = ast_alloc(p, token.location, AST_BLOCK, sizeof(*lambda->block));
         lambda->block->belongs_to_lambda = lambda;
+
+        p->current_lambda = lambda;
         parse_into_block(p, lambda->block);
         Exit_Block(p, arguments_block);
+        p->current_lambda = previous_lambda;
+
         return xx lambda;
     }
     return xx type_definition;
@@ -366,7 +374,7 @@ Ast_Declaration *parse_lambda_argument(Parser *p)
     }
 
     if (token.type != TOKEN_IDENT) {
-        parser_report_error(p, token.location, "Expected identifier after %s.", token_type_to_string(token.type));
+        parser_report_error(p, token.location, "Expected identifier after '%s'.", token_type_to_string(token.type));
     }
 
     // Parse the parameter declaration.
@@ -430,6 +438,22 @@ Ast_Type_Definition *parse_lambda_type(Parser *p)
     Source_Location location = token.location;
 
     Ast_Type_Definition *type_definition = make_type_definition(p, location);
+
+    // Check for closing paren, meaning an empty argument list.
+
+    if (peek_next_token(p).type == ')') {
+        eat_next_token(p);
+        token = peek_next_token(p); 
+        if (token.type == TOKEN_RIGHT_ARROW) {
+            eat_next_token(p);
+            type_definition->lambda_return_type = parse_type_definition(p, NULL);
+        } else {
+            type_definition->lambda_return_type = p->workspace->type_def_void;
+        }
+        return type_definition;
+    }
+
+    // Otherwise, parse a list of arguments.
 
     while (1) {
         Ast_Declaration *parameter = parse_lambda_argument(p);
@@ -666,8 +690,15 @@ void parse_into_block(Parser *p, Ast_Block *block)
         }
 
         Ast *stmt = parse_statement(p);
-        arrput(block->statements, stmt);
-        if (statement_requires_semicolon(stmt)) eat_semicolon(p);
+        if (stmt->type != AST_DECLARATION) arrput(block->statements, stmt);
+
+        if (statement_requires_semicolon(stmt)) {
+            eat_semicolon(p);
+        } else {
+            // Check for a semicolon anyways.
+            token = peek_next_token(p);
+            if (token.type == ';') eat_next_token(p);
+        }
 
         if (p->reported_error) return;
     }
@@ -694,12 +725,12 @@ Ast *parse_statement(Parser *p)
     case TOKEN_KEYWORD_RETURN: {
         eat_next_token(p);        
 
-        if (!p->block->belongs_to_lambda) {
+        if (!p->current_lambda) {
             parser_report_error(p, token.location, "Cannot use 'return' outside of a procedure.");
         }
         Ast_Return *ret = ast_alloc(p, token.location, AST_RETURN, sizeof(*ret));
         ret->subexpression = parse_expression(p);
-        ret->lambda_i_belong_to = p->block->belongs_to_lambda;
+        ret->lambda_i_belong_to = p->current_lambda;
         return xx ret;
     }
 
@@ -708,9 +739,13 @@ Ast *parse_statement(Parser *p)
 
     case TOKEN_KEYWORD_WHILE: {
         eat_next_token(p);
-        Ast_While *while_stmt = ast_alloc(p, token.location, AST_WHILE, sizeof(*while_stmt));
 
+        Ast *previous_loop = p->current_loop;
+            
+        Ast_While *while_stmt = ast_alloc(p, token.location, AST_WHILE, sizeof(*while_stmt));
         while_stmt->condition_expression = parse_expression(p);
+
+        p->current_loop = xx while_stmt;
 
         // Check for "then" keyword and consume it.
         // TODO: do we want/need this?
@@ -720,6 +755,8 @@ Ast *parse_statement(Parser *p)
         }
         while_stmt->then_statement = parse_statement(p);
 
+        p->current_loop = previous_loop;
+
         return xx while_stmt;
     }
 
@@ -728,7 +765,7 @@ Ast *parse_statement(Parser *p)
     {
         eat_next_token(p);
 
-        if (!p->block->belongs_to_loop) {
+        if (!p->current_loop) {
             parser_report_error(p, token.location, "Cannot use '%s' outside of a loop.", token_type_to_string(token.type));
         }
                 
@@ -768,12 +805,12 @@ Ast_Declaration *parse_declaration(Parser *p)
     Ast_Declaration *decl = ast_alloc(p, token.location, AST_DECLARATION, sizeof(*decl));
     decl->ident = make_identifier(p, token);
 
-    if (p->block->belongs_to_struct) {
+    if (p->current_block->belongs_to_struct) {
         decl->flags |= DECLARATION_IS_STRUCT_MEMBER;
     }
 
     // Add the declaration to the block.
-    checked_add_to_scope(p, p->block, decl);
+    checked_add_to_scope(p, p->current_block, decl);
 
     // After first colon has been parsed, we expect an optional type definition and then ':' or '='.
 
@@ -783,20 +820,35 @@ Ast_Declaration *parse_declaration(Parser *p)
         eat_next_token(p);
 
         decl->flags |= DECLARATION_IS_CONSTANT;
-        decl->my_type = NULL;
+        // decl->my_type = NULL;
         decl->expression = parse_expression(p);
 
+        if (decl->expression->type == AST_LAMBDA) {
+            Ast_Lambda *lambda = xx decl->expression;
+            lambda->name = decl->ident->name;
+        }
+
         // This makes it super easy to check if we are an enum value later.
-        if (p->block->belongs_to_enum) {
+        if (p->current_block->belongs_to_enum) {
             decl->flags |= DECLARATION_IS_ENUM_VALUE;
         }
 
         return decl;
-    case '=':
+    case '=': {
         eat_next_token(p);
-        decl->my_type = NULL;
-        decl->expression = parse_expression(p);
+        // We know we have something like `name := value`.
+        // We parse the expression and create a type instantiation in the current block.
+        Ast *initializer = parse_expression(p);
+        
+        Ast_Type_Instantiation *inst = ast_alloc(p, initializer->location, AST_TYPE_INSTANTIATION, sizeof(*inst));
+        inst->type_definition = NULL;
+        inst->initializer_expression = initializer;
+        inst->name = decl->ident->name.data;
+        arrput(p->current_block->statements, xx inst); // TODO: How does this work with structs and their initializers?
+
+        decl->expression = xx inst;
         return decl;
+    }
     default: {
         // parse_type_definition() either converts an expression or parses a new one if NULL is passed.
         decl->my_type = parse_type_definition(p, NULL);
@@ -805,11 +857,27 @@ Ast_Declaration *parse_declaration(Parser *p)
         token = peek_next_token(p);
         switch (token.type) {
         case ':':
+            eat_next_token(p);
             decl->flags |= DECLARATION_IS_CONSTANT;
-            // fallthrough
+            decl->expression = parse_expression(p);
+            if (decl->expression->type == AST_LAMBDA) {
+                Ast_Lambda *lambda = xx decl->expression;
+                lambda->name = decl->ident->name;
+            }
+            return decl;
         case '=':
             eat_next_token(p);
-            decl->expression = parse_expression(p);
+            // We know we have something like `name: type = value`.
+            // We parse the expression and create a type instantiation in the current block.
+            Ast *initializer = parse_expression(p);
+        
+            Ast_Type_Instantiation *inst = ast_alloc(p, initializer->location, AST_TYPE_INSTANTIATION, sizeof(*inst));
+            inst->type_definition = NULL;
+            inst->initializer_expression = initializer;
+            inst->name = decl->ident->name.data;
+            arrput(p->current_block->statements, xx inst); // TODO: How does this work with structs and their initializers?
+
+            decl->expression = xx inst;
             return decl;
         case ';':
         case ',':
@@ -825,17 +893,18 @@ Ast_Declaration *parse_declaration(Parser *p)
 Ast_Block *parse_toplevel(Parser *p)
 {
     // TODO: what do we set the location to?
-    p->block = ast_alloc(p, (Source_Location){0}, AST_BLOCK, sizeof(*p->block));
+    p->current_block = ast_alloc(p, (Source_Location){0}, AST_BLOCK, sizeof(Ast_Block));
 
     while (1) {
         Token token = peek_next_token(p);
         if (token.type == TOKEN_END_OF_INPUT) {
             eat_next_token(p);
-            return p->block;
+            return p->current_block;
         }
 
         Ast *stmt = parse_statement(p);
-        arrput(p->block->statements, stmt);
+        if (stmt->type != AST_DECLARATION) arrput(p->current_block->statements, stmt);
+
         if (statement_requires_semicolon(stmt)) {
             eat_semicolon(p);
         } else {
@@ -844,7 +913,7 @@ Ast_Block *parse_toplevel(Parser *p)
             if (token.type == ';') eat_next_token(p);
         }
 
-        if (p->reported_error) return p->block;
+        if (p->reported_error) return p->current_block;
     }
 
     UNREACHABLE;
@@ -1001,6 +1070,156 @@ const char *ast_type_to_string(Ast_Type type)
     case AST_DECLARATION: return "declaration";
     case AST_USING: return "using";
     case AST_CAST: return "cast";
+    }
+}
+
+char *ast_to_string(Ast *ast)
+{
+    Push_Arena(&temporary_arena);
+    String_Builder sb = {0};
+    print_ast_to_builder(&sb, ast, 0);
+    sb_append(&sb, "\0", 1);
+    Pop_Arena();
+    return sb.data;
+}
+
+void dump_ast(Ast *ast)
+{
+    Push_Arena(&temporary_arena);
+    String_Builder sb = {0};
+    print_ast_to_builder(&sb, ast, 0);
+    fwrite(sb.data, 1, sb.count, stdout);
+    printf("\n");
+    Pop_Arena();
+}
+
+void print_ast_to_builder(String_Builder *sb, Ast *ast, size_t indent)
+{
+    switch (ast->type) {
+    case AST_UNINITIALIZED: printf("**UNINITIALIZED**");
+    case AST_BLOCK: {
+        Ast_Block *block = xx ast;
+        sb_append_cstr(sb, "{\n");
+        For (block->statements) {
+            for (size_t i = 0; i < indent + 1; ++i) sb_append_cstr(sb, "    ");
+            print_ast_to_builder(sb, block->statements[it], indent + 1);
+            sb_append_cstr(sb, "\n");
+        }
+        sb_append_cstr(sb, "}");
+        break;
+    }
+    case AST_LITERAL: {
+        Ast_Literal *literal = xx ast;
+        if (literal->type->number_flags & NUMBER_FLAGS_NUMBER) {
+            if (literal->type->number_flags & NUMBER_FLAGS_FLOAT) {
+                sb_print(sb, "%f", literal->double_value);
+                return;
+            }
+            sb_print(sb, "%lu", literal->integer_value);
+            return;
+        }
+        // some other type...
+        sb_append_cstr(sb, "<literal>");
+        break;
+    }
+    case AST_IDENT: {
+        const Ast_Ident *ident = xx ast;
+        sb_append(sb, ident->name.data, ident->name.count);
+        break;
+    }
+    case AST_UNARY_OPERATOR: {
+        const Ast_Unary_Operator *unary = xx ast;
+        sb_append_cstr(sb, token_type_to_string(unary->operator_type));
+        print_ast_to_builder(sb, unary->subexpression, indent);
+        break;
+    }
+    case AST_BINARY_OPERATOR: {
+        const Ast_Binary_Operator *binary = xx ast;
+        print_ast_to_builder(sb, binary->left, indent);
+        sb_append_cstr(sb, token_type_to_string(binary->operator_type));
+        print_ast_to_builder(sb, binary->right, indent);
+        break;
+    }
+    case AST_LAMBDA: {
+        const Ast_Lambda *lambda = xx ast;
+        sb_append_cstr(sb, type_to_string(lambda->type_definition));
+        print_ast_to_builder(sb, xx lambda->block, indent);
+        break;
+    }
+    case AST_PROCEDURE_CALL: {
+        const Ast_Procedure_Call *call = xx ast;       
+        print_ast_to_builder(sb, call->procedure_expression, indent);
+        sb_append_cstr(sb, "(");
+        For (call->arguments) {
+            if (it > 0) sb_append_cstr(sb, ", ");
+            print_ast_to_builder(sb, call->arguments[it], indent);
+        }
+        sb_append_cstr(sb, ")");
+        break;
+    }
+    case AST_WHILE: {
+        const Ast_While *stmt = xx ast;
+        sb_append_cstr(sb, "while ");
+        print_ast_to_builder(sb, stmt->condition_expression, indent);
+        sb_append_cstr(sb, " ");
+        print_ast_to_builder(sb, stmt->then_statement, indent);
+        break;
+    }
+    case AST_IF: {
+        const Ast_If *stmt = xx ast;
+        sb_append_cstr(sb, "if ");
+        print_ast_to_builder(sb, stmt->condition_expression, indent);
+        sb_append_cstr(sb, " ");
+        print_ast_to_builder(sb, stmt->then_statement, indent);
+        if (stmt->else_statement) {
+            sb_append_cstr(sb, " else ");
+            print_ast_to_builder(sb, stmt->else_statement, indent);
+        }
+        break;
+    }
+    case AST_LOOP_CONTROL: {
+        const Ast_Loop_Control *loop_control = xx ast;
+        sb_append_cstr(sb, token_type_to_string(loop_control->keyword_type));
+        break;
+    }
+    case AST_RETURN: {
+        const Ast_Return *ret = xx ast;
+        sb_append_cstr(sb, "return ");
+        print_ast_to_builder(sb, ret->subexpression, indent);
+        break;
+    }
+    case AST_TYPE_DEFINITION: {
+        sb_append_cstr(sb, type_to_string(xx ast));
+        break;
+    }
+    case AST_TYPE_INSTANTIATION: {
+        Ast_Type_Instantiation *inst = xx ast;
+        sb_append_cstr(sb, type_to_string(inst->type_definition));
+        sb_append_cstr(sb, "{");
+        if (inst->initializer_expression) print_ast_to_builder(sb, inst->initializer_expression, indent);
+        sb_append_cstr(sb, "}");
+        break;
+    }
+    case AST_ENUM: sb_append_cstr(sb, "enum"); break;
+    case AST_STRUCT: sb_append_cstr(sb, "struct"); break;
+    case AST_DECLARATION: {
+        Ast_Declaration *decl = xx ast;
+        if (decl->ident) sb_append(sb, decl->ident->name.data, decl->ident->name.count);
+        else sb_append_cstr(sb, "<anonymous>");
+        sb_append_cstr(sb, " : ");
+        if (decl->my_type) sb_append_cstr(sb, type_to_string(decl->my_type));
+        else sb_append_cstr(sb, "<inferred>");
+        if (decl->expression) {
+            sb_append_cstr(sb, " = ");
+            print_ast_to_builder(sb, decl->expression, indent);
+        }
+        break;
+    }
+    case AST_USING: sb_append_cstr(sb, "using"); break;
+    case AST_CAST: sb_append_cstr(sb, "cast"); break;
+    default:
+        printf("<<< %s\n", ast_type_to_string(ast->type));
+        assert(0);
     }
 }
 

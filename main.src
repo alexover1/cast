@@ -1,9 +1,6 @@
-main :: (name: string) -> int {
-    if (true) return 69;
-    if (false) return 420;
-	return 69420;
-}
+main :: () -> int {
+    flag := true || false;
 
-WIDTH :: 16;
-HEIGHT :: 9;
-FACTOR :: 80;
+    if flag return 69;
+    return 420;
+}

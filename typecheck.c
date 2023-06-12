@@ -7,8 +7,10 @@
 #define is_integer_type(defn) number_flags_is_int((defn)->number_flags)
 
 #define Replace(ast) do { \
-    if ((ast)->replacement) (ast) = (ast)->replacement; \
+    while (ast->replacement) ast = ast->replacement; \
 } while(0)
+
+#define Wait_On(expr) if ((expr)->inferred_type == NULL) return
 
 bool pointer_types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y)
 {
@@ -110,7 +112,7 @@ void typecheck_identifier(Workspace *w, Ast_Ident *ident)
         report_error(&ident->base, "Undeclared identifier '"SV_Fmt"'.", SV_Arg(ident->name));
     }
 
-    if (!resolved_decl->base.inferred_type) return;
+    Wait_On(&resolved_decl->base);
 
     ident->base.inferred_type = resolved_decl->base.inferred_type;
 }
@@ -125,6 +127,9 @@ void typecheck_unary_operator(Workspace *w, Ast_Unary_Operator *unary)
 // @Cleanup: This whole function's error messages.
 void typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary)
 {
+    // TODO: If left and right are literals, replace us with a literal.
+    // Technically, LLVM does this for us, but let's not rely on that.
+    
     // Check for constant replacement.
     Ast *binary_left = binary->left;
     Ast *binary_right = binary->right;
@@ -220,11 +225,10 @@ void typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary)
     binary->base.inferred_type = left;
 }
 
-bool typecheck_lambda(Workspace *w, Ast_Lambda *lambda)
+void typecheck_lambda(Workspace *w, Ast_Lambda *lambda)
 {
-    UNUSED(w);
     lambda->base.inferred_type = lambda->type_definition;
-    return true;
+    UNUSED(w);
 }
 
 bool typecheck_procedure_call(Workspace *w, Ast_Procedure_Call *call)
@@ -241,9 +245,9 @@ bool typecheck_while(Workspace *w, Ast_While *while_stmt)
     UNIMPLEMENTED;
 }
 
-bool typecheck_if(Workspace *w, Ast_If *if_stmt)
+void typecheck_if(Workspace *w, Ast_If *if_stmt)
 {
-    if (!if_stmt->condition_expression->inferred_type) return false;
+    Wait_On(if_stmt->condition_expression);
 
     // TODO: implicit bool conversions.
 
@@ -252,12 +256,11 @@ bool typecheck_if(Workspace *w, Ast_If *if_stmt)
     }
 
     if_stmt->base.inferred_type = w->type_def_void;
-    return true;
 }
 
-bool typecheck_return(Workspace *w, Ast_Return *ret)
+void typecheck_return(Workspace *w, Ast_Return *ret)
 {
-    if (!ret->subexpression->inferred_type) return false;
+    Wait_On(ret->subexpression);
     
     Ast_Type_Definition *expected_type = ret->lambda_i_belong_to->type_definition->lambda_return_type;
     Ast_Type_Definition *actual_type = ret->subexpression->inferred_type;
@@ -268,7 +271,6 @@ bool typecheck_return(Workspace *w, Ast_Return *ret)
     }
 
     ret->base.inferred_type = w->type_def_void;
-    return true;
 }
 
 void typecheck_definition(Workspace *w, Ast_Type_Definition *defn)
@@ -278,9 +280,22 @@ void typecheck_definition(Workspace *w, Ast_Type_Definition *defn)
 
 void typecheck_instantiation(Workspace *w, Ast_Type_Instantiation *inst)
 {
+    Wait_On(inst->initializer_expression);
+
+    // The declaration `x := 5` will produce an initializer expression with no type definition,
+    // in which case we just infer the type from the initializer.
+
+    if (!inst->type_definition) {
+        inst->type_definition = inst->initializer_expression->inferred_type;
+    } else {
+        if (!types_are_equal(inst->initializer_expression->inferred_type, inst->type_definition)) {
+            report_error(inst->initializer_expression, "Type mismatch: Wanted %s but got %s.",
+                type_to_string(inst->type_definition), type_to_string(inst->initializer_expression->inferred_type));
+        }
+        inst->base.inferred_type = inst->type_definition;
+    }
+
     UNUSED(w);
-    UNUSED(inst);
-    UNIMPLEMENTED;
 }
 
 void typecheck_enum(Workspace *w, Ast_Enum *enum_defn)
@@ -395,6 +410,111 @@ void typecheck_ast(Workspace *w, Ast *ast)
     case AST_DECLARATION:        typecheck_declaration(w, xx ast);     break;
     case AST_CAST:               typecheck_cast(w, xx ast);            break;
     }
+}
+
+void flatten_for_typechecking(Workspace *w, Ast *ast)
+{
+    if (ast == NULL) return;
+    switch (ast->type) {
+    case AST_BLOCK: {
+        Ast_Block *block = xx ast;
+        For (block->statements) flatten_for_typechecking(w, block->statements[it]);
+        For (block->declarations) flatten_for_typechecking(w, xx block->declarations[it]);
+        return; // So we don't get added.
+    }
+    case AST_LITERAL:
+        return; // No need to typecheck.
+    case AST_IDENT:
+        break;
+    case AST_UNARY_OPERATOR: {
+        Ast_Unary_Operator *unary = xx ast;
+        flatten_for_typechecking(w, unary->subexpression);
+        break;
+    }
+    case AST_BINARY_OPERATOR: {
+        Ast_Binary_Operator *binary = xx ast;
+        flatten_for_typechecking(w, binary->left);
+        flatten_for_typechecking(w, binary->right);
+        break;
+    }
+    case AST_LAMBDA: {
+        Ast_Lambda *lambda = xx ast;
+        flatten_for_typechecking(w, xx lambda->type_definition);
+        flatten_for_typechecking(w, xx lambda->block);
+        break;
+    }
+    case AST_PROCEDURE_CALL: {
+        Ast_Procedure_Call *call = xx ast;
+        flatten_for_typechecking(w, call->procedure_expression);
+        For (call->arguments) flatten_for_typechecking(w, call->arguments[it]);
+        break;
+    }
+    case AST_WHILE: {
+        Ast_While *while_stmt = xx ast;
+        flatten_for_typechecking(w, while_stmt->condition_expression);
+        flatten_for_typechecking(w, while_stmt->then_statement);
+        break;
+    }
+    case AST_IF: {
+        Ast_If *if_stmt = xx ast;
+        flatten_for_typechecking(w, if_stmt->condition_expression);
+        flatten_for_typechecking(w, if_stmt->then_statement);
+        if (if_stmt->else_statement) flatten_for_typechecking(w, if_stmt->else_statement);
+        break;
+    }
+    case AST_LOOP_CONTROL:
+        break;
+    case AST_RETURN: {
+        Ast_Return *ret = xx ast;
+        flatten_for_typechecking(w, ret->subexpression);
+        break;
+    }
+    case AST_TYPE_DEFINITION: {
+        Ast_Type_Definition *defn = xx ast;
+        if (defn->struct_desc)        flatten_for_typechecking(w, xx defn->struct_desc);
+        if (defn->enum_defn)          flatten_for_typechecking(w, xx defn->enum_defn);
+        if (defn->type_name)          flatten_for_typechecking(w, xx defn->type_name);
+        if (defn->struct_call)        flatten_for_typechecking(w, xx defn->struct_call);
+        if (defn->array_element_type) flatten_for_typechecking(w, xx defn->array_element_type);
+        if (defn->pointer_to)         flatten_for_typechecking(w, xx defn->pointer_to);
+        if (defn->lambda_return_type) {
+            flatten_for_typechecking(w, xx defn->lambda_return_type);
+            For (defn->lambda_argument_types) flatten_for_typechecking(w, xx defn->lambda_argument_types[it]);
+        }
+        return; // Don't add ourselves.
+    }
+    case AST_TYPE_INSTANTIATION: {
+        Ast_Type_Instantiation *inst = xx ast;
+        flatten_for_typechecking(w, xx inst->type_definition);
+        flatten_for_typechecking(w, inst->initializer_expression);
+        break;
+    }
+    case AST_ENUM: {
+        Ast_Enum *enum_defn = xx ast;
+        // flatten_for_typechecking(array, xx enum_defn->underlying_int_type);
+        flatten_for_typechecking(w, xx enum_defn->block);
+        break;
+    }
+    case AST_STRUCT: {
+        Ast_Struct *struct_desc = xx ast;
+        flatten_for_typechecking(w, xx struct_desc->block);
+        break;
+    }
+    case AST_DECLARATION: {
+        Ast_Declaration *decl = xx ast;
+        arrput(w->declarations, decl);
+        flatten_for_typechecking(w, xx decl->my_type);
+        flatten_for_typechecking(w, xx decl->expression);
+        break;
+    }
+    case AST_USING: {
+        Ast_Using *using = xx ast;
+        flatten_for_typechecking(w, using->subexpression);
+        break;
+    }
+    default: UNREACHABLE;
+    }
+    arrput(w->typecheck_queue, ast);
 }
 
 void report_error(Ast *ast, const char *format, ...)
