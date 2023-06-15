@@ -36,6 +36,110 @@ bool types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y)
     return false;
 }
 
+void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
+{
+#if 0
+    String_Builder sb = {0};
+    sb_append_cstr(&sb, ">>> ");
+    print_decl_to_builder(&sb, decl);
+    sb_append_cstr(&sb, "\n");
+    printf(SV_Fmt, SV_Arg(sb));
+#endif
+    
+    // Note: None of this gets set for non-constants, which is totally fine.
+    while (decl->typechecking_position < arrlenu(decl->flattened)) {
+        Ast_Node node = decl->flattened[decl->typechecking_position];
+        if (node.expression) {
+            typecheck_expression(w, node.expression);            
+            if (node.expression->inferred_type) {
+                decl->typechecking_position += 1;
+            } else {
+                // Hit a roadblock.
+                printf("$$$ %s\n", expr_to_string(node.expression));
+                return;
+            }
+        }
+        if (node.statement) {
+            typecheck_statement(w, node.statement);
+            if (node.statement->typechecked) {
+                decl->typechecking_position += 1;
+            } else {
+                // Hit a roadblock.
+                printf("$$$ %s\n", stmt_to_string(node.statement));
+                return;
+            }
+        }
+    }
+
+    // We are done typechecking our members.
+
+    if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) goto done;
+
+    if (decl->flags & DECLARATION_IS_CONSTANT) {
+        if (!decl->root_expression) {
+            report_error(w, decl->location, "Constant declarations must have a value (this is an internal error).");
+        }
+    }
+
+    if (!decl->my_type) {
+        if (!decl->root_expression) {
+            report_error(w, decl->location, "We have a non-constant declaration with no type and no value (this is an internal error).");
+        }
+
+        if (decl->root_expression->kind == AST_LITERAL) {
+            Ast_Literal *literal = xx decl->root_expression;
+            decl->my_type = literal->default_type;
+        } else {
+            assert(decl->root_expression->inferred_type);
+            decl->my_type = decl->root_expression->inferred_type;
+        }
+
+        decl->flags |= DECLARATION_TYPE_WAS_INFERRED_FROM_EXPRESSION;
+        goto done;
+    }
+
+    // So we know we have a type now.
+
+    if (!decl->root_expression) {
+        // We're definitely not a constant (this error is checked above).
+        // So we just set the default value for the type.
+        if (!decl->my_type->is_leaf) {
+            report_error(w, decl->location, "Support for default values for non-leaf types is not implemented yet (this is an internal error).");
+        }
+
+        if (decl->my_type->struct_desc) UNIMPLEMENTED;
+        if (decl->my_type->enum_defn) UNIMPLEMENTED;
+        if (decl->my_type->lambda_return_type) UNIMPLEMENTED; // TODO: What does this even mean? I think we should put null here.
+
+        // Otherwise, we're a literal.
+        assert(decl->my_type->literal_name);
+
+        Ast_Literal *literal = context_alloc(sizeof(*literal));
+        literal->_expression.kind = AST_LITERAL;
+        literal->_expression.location = decl->location;
+        literal->integer_value = 0; // Works for float, null, & bool also.
+        literal->default_type = decl->my_type; // TODO: I think we need to remove default_type from literals.
+        literal->number_flags = decl->my_type->number_flags;
+
+        decl->root_expression = xx literal;
+        decl->flags |= DECLARATION_VALUE_WAS_INFERRED_FROM_TYPE;
+    }
+
+    if (decl->root_expression->kind == AST_LITERAL) {
+        typecheck_literal(w, xx decl->root_expression, decl->my_type);
+        Replace(decl->root_expression);
+    } else {
+        // Check that we're not doing something like `x: bool = 12345`.
+        if (!types_are_equal(decl->my_type, decl->root_expression->inferred_type)) {
+            report_error(w, decl->location, "Type mismatch: Wanted %s but got %s.",
+                type_to_string(decl->my_type), type_to_string(decl->root_expression->inferred_type));
+        }
+    }
+
+done:
+    decl->flags |= DECLARATION_HAS_BEEN_TYPECHECKED;
+}
+
 Ast_Expression *autocast_to_bool(Workspace *w, Ast_Expression *expr)
 {
     Ast_Type_Definition *defn = expr->inferred_type;
@@ -66,12 +170,20 @@ Ast_Expression *autocast_to_bool(Workspace *w, Ast_Expression *expr)
     }
 
     if (defn->pointer_to) {
+        Ast_Literal *lit = context_alloc(sizeof(*lit));
+        lit->_expression.kind = AST_LITERAL;
+        lit->_expression.location = expr->location;
+        lit->_expression.inferred_type = defn;
+        lit->default_type = w->type_def_void_pointer; // @Ugh because this is how we check if we're the literal 'null'.
+        lit->integer_value = 0;
+        
         Ast_Binary_Operator *binary = context_alloc(sizeof(*binary));
+        lit->_expression.kind = AST_BINARY_OPERATOR;
         binary->_expression.location = expr->location;
         binary->_expression.inferred_type = w->type_def_bool;
         binary->left = expr;
         binary->operator_type = TOKEN_ISNOTEQUAL;
-        binary->right = xx w->literal_null;
+        binary->right = xx lit;
         return xx binary;
     }
 
@@ -173,6 +285,10 @@ void typecheck_identifier(Workspace *w, Ast_Ident *ident)
     // This is where we might hit a roadblock.
 
     if (!(decl->flags & DECLARATION_HAS_BEEN_TYPECHECKED)) {
+        if (!(decl->flags & DECLARATION_IS_CONSTANT)) {
+            report_error(w, ident->_expression.location, "Cannot use variable '"SV_Fmt"' before it is defined.", SV_Arg(ident->name));
+        }
+        // Otherwise we must wait for the constant to come in.
         return;
     }
 
@@ -337,7 +453,35 @@ bool typecheck_procedure_call(Workspace *w, Ast_Procedure_Call *call)
     UNIMPLEMENTED;
 }
 
-bool typecheck_while(Workspace *w, Ast_While *while_stmt)
+inline void typecheck_definition(Workspace *w, Ast_Type_Definition *defn)
+{
+    // @Cleanup: can this happen? (we don't add it in the flattening anymore)
+    defn->_expression.inferred_type = w->type_def_type;
+}
+
+void typecheck_cast(Workspace *w, Ast_Cast *cast)
+{
+    UNUSED(w);
+    cast->_expression.inferred_type = cast->type;
+}
+
+void typecheck_expression(Workspace *w, Ast_Expression *expr)
+{
+    while (expr->replacement) expr = expr->replacement;
+    if (expr->inferred_type) return;
+    switch (expr->kind) {
+    case AST_LITERAL:            typecheck_literal(w, xx expr, NULL);   break;
+    case AST_IDENT:              typecheck_identifier(w, xx expr);      break;
+    case AST_UNARY_OPERATOR:     typecheck_unary_operator(w, xx expr);  break;
+    case AST_BINARY_OPERATOR:    typecheck_binary_operator(w, xx expr); break;
+    case AST_LAMBDA:             typecheck_lambda(w, xx expr);          break;
+    case AST_PROCEDURE_CALL:     typecheck_procedure_call(w, xx expr);  break;
+    case AST_TYPE_DEFINITION:    assert(0 && "This shouldn't have been added to the queue.");
+    case AST_CAST:               typecheck_cast(w, xx expr);            break;
+    }
+}
+
+void typecheck_while(Workspace *w, Ast_While *while_stmt)
 {
     UNUSED(w);
     UNUSED(while_stmt);
@@ -346,8 +490,6 @@ bool typecheck_while(Workspace *w, Ast_While *while_stmt)
 
 void typecheck_if(Workspace *w, Ast_If *if_stmt)
 {
-    Wait_On(if_stmt->condition_expression);
-
     // TODO: implicit bool conversions.
 
     if (if_stmt->condition_expression->inferred_type != w->type_def_bool) {
@@ -369,133 +511,11 @@ void typecheck_return(Workspace *w, Ast_Return *ret)
     }
 }
 
-inline void typecheck_definition(Workspace *w, Ast_Type_Definition *defn)
-{
-    // @Cleanup: can this happen? (we don't add it in the flattening anymore)
-    defn->_expression.inferred_type = w->type_def_type;
-}
-
 void typecheck_using(Workspace *w, Ast_Using *using)
 {
     UNUSED(w);
     UNUSED(using);
     UNIMPLEMENTED;
-}
-
-void typecheck_cast(Workspace *w, Ast_Cast *cast)
-{
-    UNUSED(w);
-    cast->_expression.inferred_type = cast->type;
-}
-
-void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
-{
-    // Note: None of this gets set for non-constants, which is totally fine.
-    while (decl->typechecking_position < arrlenu(decl->flattened)) {
-        Ast_Node node = decl->flattened[decl->typechecking_position];
-        if (node.expression) {
-            typecheck_expression(w, node.expression);            
-            if (node.expression->inferred_type) {
-                decl->typechecking_position += 1;
-            } else {
-                // Hit a roadblock.
-                break;
-            }
-        }
-        if (node.statement) {
-            typecheck_statement(w, node.statement);
-            if (node.statement->typechecked) {
-                decl->typechecking_position += 1;
-            } else {
-                // Hit a roadblock.
-                break;
-            }
-        }
-    }
-
-    // We are done typechecking our members.
-
-    if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) goto done;
-
-    if (decl->flags & DECLARATION_IS_CONSTANT) {
-        if (!decl->root_expression) {
-            report_error(w, decl->location, "Constant declarations must have a value (this is an internal error).");
-        }
-    }
-
-    if (!decl->my_type) {
-        if (!decl->root_expression) {
-            report_error(w, decl->location, "We have a non-constant declaration with no type and no value (this is an internal error).");
-        }
-
-        if (decl->root_expression->kind == AST_LITERAL) {
-            Ast_Literal *literal = xx decl->root_expression;
-            decl->my_type = literal->default_type;
-        } else {
-            assert(decl->root_expression->inferred_type);
-            decl->my_type = decl->root_expression->inferred_type;
-        }
-
-        decl->flags |= DECLARATION_TYPE_WAS_INFERRED_FROM_EXPRESSION;
-        goto done;
-    }
-
-    // So we know we have a type now.
-
-    if (!decl->root_expression) {
-        // We're definitely not a constant (this error is checked above).
-        // So we just set the default value for the type.
-        if (!decl->my_type->is_leaf) {
-            report_error(w, decl->location, "Support for default values for non-leaf types is not implemented yet (this is an internal error).");
-        }
-
-        if (decl->my_type->struct_desc) UNIMPLEMENTED;
-        if (decl->my_type->enum_defn) UNIMPLEMENTED;
-        if (decl->my_type->lambda_return_type) UNIMPLEMENTED; // TODO: What does this even mean? I think we should put null here.
-
-        // Otherwise, we're a literal.
-        assert(decl->my_type->literal_name);
-
-        Ast_Literal *literal = context_alloc(sizeof(*literal));
-        literal->_expression.kind = AST_LITERAL;
-        literal->_expression.location = decl->location;
-        literal->integer_value = 0; // Works for float, null, & bool also.
-        literal->default_type = decl->my_type; // TODO: I think we need to remove default_type from literals.
-        literal->number_flags = decl->my_type->number_flags;
-
-        decl->root_expression = xx literal;
-        decl->flags |= DECLARATION_VALUE_WAS_INFERRED_FROM_TYPE;
-    }
-
-    if (decl->root_expression->kind == AST_LITERAL) {
-        typecheck_literal(w, xx decl->root_expression, decl->my_type);
-        Replace(decl->root_expression);
-    } else {
-        // Check that we're not doing something like `x: bool = 12345`.
-        if (!types_are_equal(decl->my_type, decl->root_expression->inferred_type)) {
-            report_error(w, decl->location, "Type mismatch: Wanted %s but got %s.",
-                type_to_string(decl->my_type), type_to_string(decl->root_expression->inferred_type));
-        }
-    }
-
-done:
-    decl->flags |= DECLARATION_HAS_BEEN_TYPECHECKED;
-}
-
-void typecheck_expression(Workspace *w, Ast_Expression *expr)
-{
-    while (expr->replacement) expr = expr->replacement;
-    if (expr->inferred_type) return;
-    switch (expr->kind) {
-    case AST_LITERAL:            typecheck_literal(w, xx expr, NULL);   break;
-    case AST_IDENT:              typecheck_identifier(w, xx expr);      break;
-    case AST_UNARY_OPERATOR:     typecheck_unary_operator(w, xx expr);  break;
-    case AST_BINARY_OPERATOR:    typecheck_binary_operator(w, xx expr); break;
-    case AST_LAMBDA:             typecheck_lambda(w, xx expr);          break;
-    case AST_PROCEDURE_CALL:     typecheck_procedure_call(w, xx expr);  break;
-    case AST_TYPE_DEFINITION:    assert(0 && "This shouldn't have been added to the queue.");
-    case AST_CAST:               typecheck_cast(w, xx expr);            break;
-    }
 }
 
 inline void typecheck_variable(Workspace *w, Ast_Variable *var)
@@ -514,15 +534,15 @@ void typecheck_statement(Workspace *w, Ast_Statement *stmt)
 {
     if (stmt->typechecked) return;
     switch (stmt->kind) {
-    case AST_BLOCK: break; // Do nothing, our members should have compiled first.
-    case AST_WHILE: typecheck_while(w, xx stmt); return;
-    case AST_IF: typecheck_if(w, xx stmt); return;
-    case AST_LOOP_CONTROL: break;
-    case AST_RETURN: typecheck_return(w, xx stmt); return;
-    case AST_USING: typecheck_using(w, xx stmt); return;
+    case AST_BLOCK:                break; // Do nothing, our members should have compiled first.
+    case AST_WHILE:                typecheck_while(w, xx stmt); break;
+    case AST_IF:                   typecheck_if(w, xx stmt); break;
+    case AST_LOOP_CONTROL:         break;
+    case AST_RETURN:               typecheck_return(w, xx stmt); break;
+    case AST_USING:                typecheck_using(w, xx stmt); break;
     case AST_EXPRESSION_STATEMENT: break;
-    case AST_VARIABLE: typecheck_variable(w, xx stmt); break;
-    case AST_ASSIGNMENT: typecheck_assignment(w, xx stmt); return;
+    case AST_VARIABLE:             typecheck_variable(w, xx stmt); break;
+    case AST_ASSIGNMENT:           typecheck_assignment(w, xx stmt); break;
     }
     stmt->typechecked = true;
 }

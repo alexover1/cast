@@ -1,12 +1,10 @@
 check_flag :: () -> int {
-    byte: u8 = 5000;
-
-    flag := true;    
+    flag := true;
     if flag return N;
     return 420;
 }
 
 
 
-
 N :: 500;
+GO_BANANAS :: false;

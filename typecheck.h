@@ -79,6 +79,10 @@ void typecheck_unary_operator(Workspace *w, Ast_Unary_Operator *unary);
 void typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary);
 void typecheck_expression(Workspace *w, Ast_Expression *expression);
 
+void typecheck_while(Workspace *w, Ast_While *while_stmt);
+void typecheck_if(Workspace *w, Ast_If *if_stmt);
+void typecheck_return(Workspace *w, Ast_Return *ret);
+void typecheck_using(Workspace *w, Ast_Using *using);
 void typecheck_variable(Workspace *w, Ast_Variable *var);
 void typecheck_assignment(Workspace *w, Ast_Assignment *assign);
 void typecheck_statement(Workspace *w, Ast_Statement *statement);

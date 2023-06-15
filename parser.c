@@ -249,18 +249,29 @@ Ast_Expression *parse_base_expression(Parser *p)
         return xx lit;
     }
         
-    // @CopyPasta
-    case TOKEN_KEYWORD_TRUE:
+    case TOKEN_KEYWORD_TRUE: {
         eat_next_token(p);
-        return xx p->workspace->literal_true;
+        Ast_Literal *lit = ast_alloc(p, token.location, AST_LITERAL, sizeof(*lit));
+        lit->default_type = p->workspace->type_def_bool;
+        lit->integer_value = 1;
+        return xx lit;
+    }
 
-    case TOKEN_KEYWORD_FALSE:
+    case TOKEN_KEYWORD_FALSE: {
         eat_next_token(p);
-        return xx p->workspace->literal_false;
+        Ast_Literal *lit = ast_alloc(p, token.location, AST_LITERAL, sizeof(*lit));
+        lit->default_type = p->workspace->type_def_bool;
+        lit->integer_value = 0;
+        return xx lit;
+    }
         
-    case TOKEN_KEYWORD_NULL:
+    case TOKEN_KEYWORD_NULL: {
         eat_next_token(p);
-        return xx p->workspace->literal_null;
+        Ast_Literal *lit = ast_alloc(p, token.location, AST_LITERAL, sizeof(*lit));
+        lit->default_type = p->workspace->type_def_void_pointer;
+        lit->integer_value = 0;
+        return xx lit;
+    }
         
     case TOKEN_KEYWORD_STRUCT:
         return xx parse_struct_desc(p);
@@ -309,6 +320,7 @@ Ast_Lambda *parse_lambda_definition(Parser *p, Ast_Type_Definition *lambda_type)
     lambda->type_definition = lambda_type;
     lambda->my_body_declaration = make_declaration(p, token.location);
     lambda->my_body_declaration->flags = DECLARATION_IS_CONSTANT | DECLARATION_IS_PROCEDURE_BODY;
+    lambda->my_body_declaration->my_type = lambda_type;
     lambda->my_body_declaration->my_block = ast_alloc(p, token.location, AST_BLOCK, sizeof(Ast_Block));
     lambda->my_body_declaration->my_block->belongs_to_lambda = lambda;
 
@@ -1032,7 +1044,7 @@ const char *expr_to_string(Ast_Expression *expr)
 {
     Push_Arena(&temporary_arena);
     String_Builder sb = {0};
-    print_expr_to_builder(&sb, expr);
+    print_expr_to_builder(&sb, expr, 0);
     sb_append(&sb, "\0", 1);
     Pop_Arena();
     return sb.data;
@@ -1058,9 +1070,10 @@ const char *stmt_to_string(Ast_Statement *stmt)
     return sb.data;
 }
 
-void print_expr_to_builder(String_Builder *sb, const Ast_Expression *expr)
+void print_expr_to_builder(String_Builder *sb, const Ast_Expression *expr, size_t depth)
 {
     if (!expr) return;
+    while (expr->replacement) expr = expr->replacement;
     switch (expr->kind) {
     case AST_LITERAL: {
         const Ast_Literal *literal = xx expr;
@@ -1084,31 +1097,31 @@ void print_expr_to_builder(String_Builder *sb, const Ast_Expression *expr)
     case AST_UNARY_OPERATOR: {
         const Ast_Unary_Operator *unary = xx expr;
         sb_append_cstr(sb, token_type_to_string(unary->operator_type));
-        print_expr_to_builder(sb, unary->subexpression);
+        print_expr_to_builder(sb, unary->subexpression, depth);
         break;
     }
     case AST_BINARY_OPERATOR: {
         const Ast_Binary_Operator *binary = xx expr;
-        print_expr_to_builder(sb, binary->left);
+        print_expr_to_builder(sb, binary->left, depth);
         sb_append_cstr(sb, token_type_to_string(binary->operator_type));
-        print_expr_to_builder(sb, binary->right);
+        print_expr_to_builder(sb, binary->right, depth);
         break;
     }
     case AST_LAMBDA: {
         const Ast_Lambda *lambda = xx expr;
         print_type_to_builder(sb, lambda->type_definition);
         sb_append_cstr(sb, " ");
-        print_stmt_to_builder(sb, xx lambda->my_body_declaration->my_block, 0);
+        print_stmt_to_builder(sb, xx lambda->my_body_declaration->my_block, depth);
         // print_stmt_to_builder(sb, xx lambda->block, 0);
         break;
     }
     case AST_PROCEDURE_CALL: {
         const Ast_Procedure_Call *call = xx expr;       
-        print_expr_to_builder(sb, call->procedure_expression);
+        print_expr_to_builder(sb, call->procedure_expression, depth);
         sb_append_cstr(sb, "(");
         For (call->arguments) {
             if (it > 0) sb_append_cstr(sb, ", ");
-            print_expr_to_builder(sb, call->arguments[it]);
+            print_expr_to_builder(sb, call->arguments[it], depth);
         }
         sb_append_cstr(sb, ")");
         break;
@@ -1120,7 +1133,7 @@ void print_expr_to_builder(String_Builder *sb, const Ast_Expression *expr)
         const Ast_Cast *cast = xx expr;
         print_type_to_builder(sb, cast->type);
         sb_append_cstr(sb, " as ");
-        print_expr_to_builder(sb, cast->subexpression);
+        print_expr_to_builder(sb, cast->subexpression, depth);
         break;
     }
     }
@@ -1185,7 +1198,7 @@ void print_stmt_to_builder(String_Builder *sb, const Ast_Statement *stmt, size_t
     case AST_WHILE: {
         const Ast_While *while_stmt = xx stmt;
         sb_append_cstr(sb, "while ");
-        print_expr_to_builder(sb, while_stmt->condition_expression);
+        print_expr_to_builder(sb, while_stmt->condition_expression, depth);
         sb_append_cstr(sb, " ");
         print_stmt_to_builder(sb, while_stmt->then_statement, depth);
         break;
@@ -1193,7 +1206,7 @@ void print_stmt_to_builder(String_Builder *sb, const Ast_Statement *stmt, size_t
     case AST_IF: {
         const Ast_If *if_stmt = xx stmt;
         sb_append_cstr(sb, "if ");
-        print_expr_to_builder(sb, if_stmt->condition_expression);
+        print_expr_to_builder(sb, if_stmt->condition_expression, depth);
         sb_append_cstr(sb, " ");
         print_stmt_to_builder(sb, if_stmt->then_statement, depth);
         if (if_stmt->else_statement) {
@@ -1210,40 +1223,40 @@ void print_stmt_to_builder(String_Builder *sb, const Ast_Statement *stmt, size_t
     case AST_RETURN: {
         const Ast_Return *ret = xx stmt;
         sb_append_cstr(sb, "return ");
-        print_expr_to_builder(sb, ret->subexpression);
+        print_expr_to_builder(sb, ret->subexpression, depth);
         break;
     }
     case AST_USING: {
         const Ast_Using *using = xx stmt;
         sb_append_cstr(sb, "using ");
-        print_expr_to_builder(sb, using->subexpression);
+        print_expr_to_builder(sb, using->subexpression, depth);
         break;
     }
     case AST_EXPRESSION_STATEMENT: {
         Ast_Expression_Statement *expr = xx stmt;
-        print_expr_to_builder(sb, expr->subexpression);
+        print_expr_to_builder(sb, expr->subexpression, depth);
         break;
     }
     case AST_VARIABLE: {
         Ast_Variable *var = xx stmt;
-        print_decl_to_builder(sb, var->declaration);
+        print_decl_to_builder(sb, var->declaration, depth);
         break;
     }
     case AST_ASSIGNMENT: {
         Ast_Assignment *assign = xx stmt;
-        print_expr_to_builder(sb, assign->pointer);
+        print_expr_to_builder(sb, assign->pointer, depth);
         sb_append_cstr(sb, " = ");
-        print_expr_to_builder(sb, assign->value);
+        print_expr_to_builder(sb, assign->value, depth);
         break;
     }
     }
 }
 
-void print_decl_to_builder(String_Builder *sb, const Ast_Declaration *decl)
+void print_decl_to_builder(String_Builder *sb, const Ast_Declaration *decl, size_t depth)
 {
     if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) {
         sb_append_cstr(sb, "<lambda body> ");
-        print_stmt_to_builder(sb, xx decl->my_block, 0);
+        print_stmt_to_builder(sb, xx decl->my_block, depth);
         return;
     }
     
@@ -1259,7 +1272,7 @@ void print_decl_to_builder(String_Builder *sb, const Ast_Declaration *decl)
     if (decl->root_expression) {
         if (decl->flags & DECLARATION_IS_CONSTANT) sb_append_cstr(sb, ": ");
         else sb_append_cstr(sb, "= ");
-        print_expr_to_builder(sb, decl->root_expression);
+        print_expr_to_builder(sb, decl->root_expression, depth);
     }
 }
 

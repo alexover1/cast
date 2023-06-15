@@ -149,9 +149,12 @@ void workspace_typecheck(Workspace *w)
 
 void workspace_llvm(Workspace *w)
 {
-    For_ (w->declarations) {
-        Ast_Declaration *it = w->declarations[it_index];
-        (void)it;
+    For (w->declarations) {
+        Ast_Declaration *decl = w->declarations[it];
+
+        if (!(decl->flags & DECLARATION_IS_CONSTANT)) continue;
+
+        llvm_build_declaration(w, decl);
     }
 }
 
@@ -160,7 +163,7 @@ void workspace_init(Workspace *w, const char *name)
     w->name = name;
     w->llvm = (Llvm){0};
     w->declarations = NULL;
-    w->typecheck_queue = NULL;
+    w->files = NULL;
 
     // Create type definitions for built-in types.
     w->type_def_type = make_type_leaf(w, "Type", 8);
@@ -202,11 +205,6 @@ void workspace_init(Workspace *w, const char *name)
     w->type_def_void = make_type_leaf(w, "void", 0);
     w->type_def_void_pointer = make_pointer_type_definition(w, 1, w->type_def_void);
     w->type_def_string = make_type_leaf(w, "string", 16);
-   
-    // Create syntax tree nodes for common literals.
-    w->literal_true = make_literal(w->type_def_bool, 1);
-    w->literal_false = make_literal(w->type_def_bool, 0);
-    w->literal_null = make_literal(w->type_def_void_pointer, 0);
 }
 
 inline void workspace_parse_entire_file(Workspace *w, Source_File file)

@@ -236,6 +236,7 @@ LLVMValueRef llvm_const_string(Llvm llvm, const char *data, size_t count)
 LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
 {
     Llvm llvm = w->llvm;
+    while (expr->replacement) expr = expr->replacement;
     switch (expr->kind) {
     case AST_LITERAL: {
         const Ast_Literal *lit = xx expr;
@@ -270,22 +271,16 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
         const Ast_Ident *ident = xx expr;
         assert(ident->resolved_declaration);
 
-        UNIMPLEMENTED;
+        assert(!(ident->resolved_declaration->flags & DECLARATION_IS_CONSTANT)); // It should have been substituted.
 
-        // if (resolved_decl->instantiation) {
-        //     if (!resolved_decl->instantiation->llvm_value) {
-        //         // TODO: We should be able to catch this error WAY sooner.
-        //         report_error(ident->_expression.location, "Use of uninitialized value is not allowed."); // TODO: error message
-        //     }
-        //     return LLVMBuildLoad2(
-        //         llvm.builder,
-        //         llvm_get_type(w, ident->_expression.inferred_type),
-        //         resolved_decl->instantiation->llvm_value,
-        //         "");
-        // }
-
-        // assert(resolved_decl->root_expression);
-        // return llvm_build_expression(w, resolved_decl->root_expression);
+        // Because during typechecking we assured that the variable's initialization came before us, this is safe.
+        assert(ident->resolved_declaration->llvm_value);
+            
+        return LLVMBuildLoad2(
+            llvm.builder,
+            llvm_get_type(w, ident->_expression.inferred_type),
+            ident->resolved_declaration->llvm_value,
+            "");
     }
     case AST_UNARY_OPERATOR:
         UNIMPLEMENTED;
@@ -393,4 +388,25 @@ void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *st
         printf("%s\n", stmt_to_string(stmt));
         assert(0);
     }
+}
+
+
+void llvm_build_declaration(Workspace *w, Ast_Declaration *decl)
+{
+#if 0
+    String_Builder sb = {0};
+    sb_append_cstr(&sb, "@@@ ");
+    print_decl_to_builder(&sb, decl, 0);
+    sb_append_cstr(&sb, "\n");
+    printf(SV_Fmt, SV_Arg(sb));
+#endif
+
+    if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) {
+        LLVMTypeRef type = llvm_get_type(w, decl->my_type); assert(type);
+        LLVMValueRef function = LLVMAddFunction(w->llvm.module, "", type);
+        llvm_build_statement(w, function, xx decl->my_block);
+        decl->llvm_value = function;
+    }
+
+    UNUSED(w);
 }

@@ -356,10 +356,10 @@ void *ast_alloc(Parser *p, Source_Location loc, unsigned short type, size_t size
 const char *expr_to_string(Ast_Expression *expr);
 const char *type_to_string(Ast_Type_Definition *defn);
 const char *stmt_to_string(Ast_Statement *stmt);
-void print_expr_to_builder(String_Builder *sb, const Ast_Expression *expr);
+void print_expr_to_builder(String_Builder *sb, const Ast_Expression *expr, size_t depth);
 void print_type_to_builder(String_Builder *sb, const Ast_Type_Definition *defn);
 void print_stmt_to_builder(String_Builder *sb, const Ast_Statement *stmt, size_t depth);
-void print_decl_to_builder(String_Builder *sb, const Ast_Declaration *decl);
+void print_decl_to_builder(String_Builder *sb, const Ast_Declaration *decl, size_t depth);
 
 // Lexing:
 

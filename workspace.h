@@ -16,13 +16,8 @@ struct Workspace {
     const char *name;
     Llvm llvm;
     Ast_Declaration **declarations;
-    Ast_Expression **typecheck_queue;
 
     Source_File *files;
-
-    Ast_Literal *literal_true;
-    Ast_Literal *literal_false;
-    Ast_Literal *literal_null;
 
     Ast_Type_Definition *type_def_int;
     Ast_Type_Definition *type_def_u8;
@@ -63,6 +58,7 @@ LLVMOpcode llvm_get_opcode(int operator_type, Ast_Type_Definition *defn, LLVMInt
 LLVMValueRef llvm_const_string(Llvm llvm, const char *data, size_t count);
 LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr);
 void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *stmt);
+void llvm_build_declaration(Workspace *w, Ast_Declaration *decl);
 
 // Random helper functions:
 
