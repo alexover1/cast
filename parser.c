@@ -322,7 +322,8 @@ Ast_Lambda *parse_lambda_definition(Parser *p, Ast_Type_Definition *lambda_type)
     lambda->my_body_declaration->flags = DECLARATION_IS_CONSTANT | DECLARATION_IS_PROCEDURE_BODY;
     lambda->my_body_declaration->my_type = lambda_type;
     lambda->my_body_declaration->my_block = ast_alloc(p, token.location, AST_BLOCK, sizeof(Ast_Block));
-    lambda->my_body_declaration->my_block->belongs_to_lambda = lambda;
+    lambda->my_body_declaration->my_block->belongs_to = BLOCK_BELONGS_TO_LAMBDA;
+    lambda->my_body_declaration->my_block->belongs_to_data = lambda;
 
     Ast_Lambda *previous_lambda = p->current_lambda;
 
@@ -334,7 +335,7 @@ Ast_Lambda *parse_lambda_definition(Parser *p, Ast_Type_Definition *lambda_type)
     return lambda;
 }
 
-Ast_Declaration *parse_lambda_argument(Parser *p)
+Ast_Declaration *parse_lambda_argument(Parser *p, unsigned index)
 {
     uint32_t flags = DECLARATION_IS_LAMBDA_ARGUMENT;
 
@@ -358,9 +359,17 @@ Ast_Declaration *parse_lambda_argument(Parser *p)
     }
 
     // Parse the parameter declaration.
-    Ast_Declaration *decl = context_alloc(sizeof(*decl));
+    Ast_Declaration *decl = make_declaration(p, token.location);
     decl->ident = make_identifier(p, token);
     decl->flags = flags;
+
+    // Add the declaration to the block and create a variable.
+    checked_add_to_scope(p, p->current_block, decl);
+
+    Ast_Variable *var = ast_alloc(p, decl->location, AST_VARIABLE, sizeof(*var));
+    var->declaration = decl;
+    var->lambda_argument_index = index;
+    arrput(p->current_block->statements, xx var);
 
     eat_token_type(p, ':', "Expected ':' after lambda argument name.");
 
@@ -382,7 +391,8 @@ Ast_Type_Definition *parse_struct_desc(Parser *p)
     
     Ast_Struct *struct_desc = arena_alloc(p->arena, sizeof(*struct_desc));
     struct_desc->block = ast_alloc(p, token.location, AST_BLOCK, sizeof(*struct_desc->block));
-    struct_desc->block->belongs_to_struct = struct_desc;
+    struct_desc->block->belongs_to = BLOCK_BELONGS_TO_STRUCT;
+    struct_desc->block->belongs_to_data = struct_desc;
 
     parse_into_block(p, struct_desc->block);
 
@@ -401,7 +411,8 @@ Ast_Type_Definition *parse_enum_defn(Parser *p)
     
     Ast_Enum *enum_defn = arena_alloc(p->arena, sizeof(*enum_defn));
     enum_defn->block = ast_alloc(p, token.location, AST_BLOCK, sizeof(*enum_defn->block));
-    enum_defn->block->belongs_to_enum = enum_defn;
+    enum_defn->block->belongs_to = BLOCK_BELONGS_TO_ENUM;
+    enum_defn->block->belongs_to_data = enum_defn;
 
     parse_into_block(p, enum_defn->block);
 
@@ -426,6 +437,7 @@ Ast_Type_Definition *parse_lambda_type(Parser *p)
     // Open a scope for the arguments.
     
     type_definition->lambda_arguments_block = ast_alloc(p, token.location, AST_BLOCK, sizeof(Ast_Block));
+    type_definition->lambda_arguments_block->belongs_to = BLOCK_IS_LAMBDA_ARGUMENTS;
     Enter_Block(p, type_definition->lambda_arguments_block);
 
     // Check for closing paren, meaning an empty argument list.
@@ -444,11 +456,14 @@ Ast_Type_Definition *parse_lambda_type(Parser *p)
 
     // Otherwise, parse a list of arguments.
 
+    unsigned count = 0;
+
     while (1) {
-        Ast_Declaration *parameter = parse_lambda_argument(p);
+        Ast_Declaration *parameter = parse_lambda_argument(p, count);
 
         assert(parameter->my_type); // TODO: We want to be able to put "name := value" in procedure type.
         arrput(type_definition->lambda_argument_types, parameter->my_type);
+        count += 1;
 
         if (p->reported_error) return type_definition;
         
@@ -867,9 +882,9 @@ Ast_Declaration *parse_declaration(Parser *p)
     decl->ident = make_identifier(p, token);
 
     // Flag us depending on the type of block we are in.
-    if (p->current_block->belongs_to_enum) {
+    if (p->current_block->belongs_to == BLOCK_BELONGS_TO_ENUM) {
         decl->flags |= DECLARATION_IS_ENUM_VALUE;
-    } else if (p->current_block->belongs_to_struct) {
+    } else if (p->current_block->belongs_to == BLOCK_BELONGS_TO_STRUCT) {
         decl->flags |= DECLARATION_IS_STRUCT_MEMBER;
     }
     

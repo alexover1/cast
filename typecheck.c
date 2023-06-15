@@ -694,6 +694,7 @@ void flatten_stmt_for_typechecking(Ast_Declaration *root, Ast_Statement *stmt)
 void flatten_decl_for_typechecking(Ast_Declaration *decl)
 {
     if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) {
+        flatten_stmt_for_typechecking(decl, xx decl->my_block->parent); // Arguments.
         flatten_stmt_for_typechecking(decl, xx decl->my_block);
         return;
     }

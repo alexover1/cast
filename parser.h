@@ -94,15 +94,20 @@ struct Ast_Node {
     Ast_Statement *statement;
 };
 
+typedef enum {
+    BLOCK_BELONGS_TO_LAMBDA,
+    BLOCK_BELONGS_TO_STRUCT,
+    BLOCK_BELONGS_TO_ENUM,
+    BLOCK_IS_LAMBDA_ARGUMENTS,
+} Ast_Block_Kind;
+
 struct Ast_Block {
     Ast_Statement _statement;
 
     Ast_Block *parent;
 
-    Ast_Lambda *belongs_to_lambda;
-    Ast_Struct *belongs_to_struct;
-    Ast_Enum *belongs_to_enum;
-    Ast_Statement *belongs_to_loop;
+    Ast_Block_Kind belongs_to;
+    void *belongs_to_data;
 
     Ast_Statement **statements; // @malloced with stb_ds
     Ast_Declaration **declarations; // @malloced with stb_ds
@@ -277,6 +282,7 @@ typedef struct {
     Ast_Statement _statement;
 
     Ast_Declaration *declaration;
+    int lambda_argument_index; // -1 when not a lambda argument.
 } Ast_Variable;
 
 typedef struct {
@@ -380,13 +386,12 @@ Ast_Expression *parse_primary_expression(Parser *p, Ast_Expression *base);
 Ast_Expression *parse_base_expression(Parser *p);
 Ast_Expression *parse_expression(Parser *p);
 
-// Ast_Expression *parse_lambda_type_or_definition(Parser *p);
+Ast_Type_Definition *parse_lambda_type(Parser *p);
+Ast_Declaration *parse_lambda_argument(Parser *p, unsigned index);
 Ast_Lambda *parse_lambda_definition(Parser *p, Ast_Type_Definition *lambda_type);
-Ast_Declaration *parse_lambda_argument(Parser *p);
 
 Ast_Type_Definition *parse_struct_desc(Parser *p);
 Ast_Type_Definition *parse_enum_defn(Parser *p);
-Ast_Type_Definition *parse_lambda_type(Parser *p);
 Ast_Type_Definition *parse_literal_type(Parser *p, String_View lit);
 Ast_Type_Definition *parse_type_definition(Parser *p, Ast_Expression *type_expression);
 

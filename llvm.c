@@ -400,6 +400,13 @@ void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *st
     case AST_VARIABLE: {
         Ast_Variable *var = xx stmt;
         const char *name = var->declaration->ident->name.data;
+
+        if (var->declaration->flags & DECLARATION_IS_LAMBDA_ARGUMENT) {
+            var->declaration->llvm_value = LLVMGetParam(function, var->lambda_argument_index);
+            LLVMSetValueName2(var->declaration->llvm_value, name, var->declaration->ident->name.count);
+            break;
+        }
+        
         LLVMTypeRef type = llvm_get_type(w, var->declaration->my_type); assert(type);
         LLVMValueRef alloca = LLVMBuildAlloca(llvm.builder, type, name);
         LLVMValueRef initializer = llvm_build_expression(w, var->declaration->root_expression);
@@ -457,6 +464,7 @@ void llvm_build_declaration(Workspace *w, Ast_Declaration *decl)
         LLVMValueRef function = LLVMAddFunction(w->llvm.module, "", type);
         LLVMBasicBlockRef entry = LLVMAppendBasicBlock(function, "entry");
         LLVMPositionBuilderAtEnd(w->llvm.builder, entry);
+        llvm_build_statement(w, function, xx decl->my_block->parent); // Arguments.
         llvm_build_statement(w, function, xx decl->my_block);
         decl->llvm_value = function;
     }

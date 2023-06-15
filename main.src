@@ -11,9 +11,7 @@ looping :: () {
     }
 }
 
-print_integer :: () {
-    number: int;
-
+print_integer :: (number: int) {
     while number > 0 {
         number /= BASE;
     }
