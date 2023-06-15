@@ -284,6 +284,7 @@ typedef struct {
     
     Ast_Expression *pointer; // a.b.c
     Ast_Expression *value;
+    int operator_type; // If also applying an operator. ('=' if not).
 } Ast_Assignment;
 
 enum {
@@ -396,6 +397,7 @@ Ast_Block *parse_block(Parser *p);
 Ast_Block *parse_toplevel(Parser *p);
 void parse_into_block(Parser *p, Ast_Block *block);
 Ast_Statement *parse_if_statement(Parser *p);
+Ast_Statement *parse_assignment(Parser *p, Ast_Expression *pointer_expression);
 Ast_Statement *parse_statement(Parser *p);
 
 Ast_Declaration *find_declaration_if_exists(const Ast_Ident *ident);

@@ -140,18 +140,27 @@ LLVMOpcode llvm_get_opcode(int operator_type, Ast_Type_Definition *defn, LLVMInt
     bool use_float = defn->number_flags & NUMBER_FLAGS_FLOAT;
     switch (operator_type) {
     case '+':
+    case TOKEN_PLUSEQUALS:
         if (use_float) return LLVMFAdd;
         return LLVMAdd;
     case '-':
+    case TOKEN_MINUSEQUALS:
         if (use_float) return LLVMFSub;
         return LLVMSub;
     case '*':
+    case TOKEN_TIMESEQUALS:
         if (use_float) return LLVMFMul;
         return LLVMMul;
     case '/':
+    case TOKEN_DIVEQUALS:
         if (use_float) return LLVMFDiv;
         if (defn->number_flags & NUMBER_FLAGS_SIGNED) return LLVMSDiv;
         return LLVMUDiv;
+    case '%':
+    case TOKEN_MODEQUALS:
+        if (use_float) return LLVMFRem;
+        if (defn->number_flags & NUMBER_FLAGS_SIGNED) return LLVMSRem;
+        return LLVMURem;
     case TOKEN_BITWISE_AND:
     case TOKEN_LOGICAL_AND:
         return LLVMAnd;
@@ -325,21 +334,29 @@ void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *st
     switch (stmt->kind) {
     case AST_BLOCK: {
         const Ast_Block *block = xx stmt;
-        LLVMBasicBlockRef basic_block = LLVMAppendBasicBlock(function, "");
-        LLVMPositionBuilderAtEnd(llvm.builder, basic_block);
+        // LLVMBasicBlockRef basic_block = LLVMAppendBasicBlock(function, "");
+        // LLVMPositionBuilderAtEnd(llvm.builder, basic_block);
         For (block->statements) {
             llvm_build_statement(w, function, block->statements[it]);
         }
         break;
     }
-    case AST_VARIABLE: {
-        Ast_Variable *var = xx stmt;
-        const char *name = var->declaration->ident->name.data;
-        LLVMTypeRef type = llvm_get_type(w, var->declaration->my_type); assert(type);
-        LLVMValueRef alloca = LLVMBuildAlloca(llvm.builder, type, name);
-        LLVMValueRef initializer = llvm_build_expression(w, var->declaration->root_expression);
-        LLVMBuildStore(llvm.builder, initializer, alloca);
-        var->declaration->llvm_value = alloca;
+    case AST_WHILE: {
+        const Ast_While *while_stmt = xx stmt;
+        LLVMValueRef condition = llvm_build_expression(w, while_stmt->condition_expression);
+            
+        LLVMBasicBlockRef basic_block_then = LLVMAppendBasicBlock(function, "then");
+        LLVMBasicBlockRef basic_block_merge = LLVMAppendBasicBlock(function, "merge");
+
+        LLVMBuildCondBr(llvm.builder, condition, basic_block_then, basic_block_merge);
+
+        // Emit the "then" statement.
+        LLVMPositionBuilderAtEnd(llvm.builder, basic_block_then);
+        llvm_build_statement(w, function, while_stmt->then_statement);
+        LLVMBuildCondBr(llvm.builder, condition, basic_block_then, basic_block_merge);
+            
+        // Emit code for the merge block.
+        LLVMPositionBuilderAtEnd(llvm.builder, basic_block_merge);
         break;
     }
     case AST_IF: {
@@ -365,7 +382,6 @@ void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *st
 
         // Emit the "else" statement.
         if (if_stmt->else_statement) {
-            // Emit the "then" statement.
             LLVMPositionBuilderAtEnd(llvm.builder, basic_block_else);
             llvm_build_statement(w, function, if_stmt->else_statement);
             LLVMBuildBr(llvm.builder, basic_block_merge);
@@ -373,17 +389,52 @@ void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *st
 
         // Emit code for the merge block.
         LLVMPositionBuilderAtEnd(llvm.builder, basic_block_merge);
-
         break;
     }
-
     case AST_RETURN: {
         const Ast_Return *ret = xx stmt;
         LLVMValueRef value = llvm_build_expression(w, ret->subexpression);
         LLVMBuildRet(llvm.builder, value);
         break;
     }
+    case AST_VARIABLE: {
+        Ast_Variable *var = xx stmt;
+        const char *name = var->declaration->ident->name.data;
+        LLVMTypeRef type = llvm_get_type(w, var->declaration->my_type); assert(type);
+        LLVMValueRef alloca = LLVMBuildAlloca(llvm.builder, type, name);
+        LLVMValueRef initializer = llvm_build_expression(w, var->declaration->root_expression);
+        LLVMBuildStore(llvm.builder, initializer, alloca);
+        var->declaration->llvm_value = alloca;
+        break;
+    }
+    case AST_ASSIGNMENT: {
+        Ast_Assignment *assign = xx stmt;
 
+        if (assign->pointer->kind == AST_IDENT) {
+            Ast_Ident *ident = xx assign->pointer;
+            Ast_Type_Definition *defn = assign->pointer->inferred_type;
+
+            LLVMValueRef pointer = ident->resolved_declaration->llvm_value;
+            LLVMValueRef value = llvm_build_expression(w, assign->value);
+
+            if (assign->operator_type == '=') {
+                LLVMBuildStore(llvm.builder, value, pointer);
+                break;
+            }
+
+            // Otherwise, build the arithmetic.
+            LLVMIntPredicate int_predicate;
+            LLVMRealPredicate real_predicate;
+            LLVMOpcode opcode = llvm_get_opcode(assign->operator_type, defn, &int_predicate, &real_predicate);
+
+            LLVMValueRef current = LLVMBuildLoad2(llvm.builder, llvm_get_type(w, defn), pointer, "");
+            LLVMValueRef new_value = LLVMBuildBinOp(llvm.builder, opcode, current, value, "");
+            LLVMBuildStore(llvm.builder, new_value, pointer);
+            break;
+        }
+
+        UNIMPLEMENTED;
+    }
     default:
         printf("%s\n", stmt_to_string(stmt));
         assert(0);
@@ -404,6 +455,8 @@ void llvm_build_declaration(Workspace *w, Ast_Declaration *decl)
     if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) {
         LLVMTypeRef type = llvm_get_type(w, decl->my_type); assert(type);
         LLVMValueRef function = LLVMAddFunction(w->llvm.module, "", type);
+        LLVMBasicBlockRef entry = LLVMAppendBasicBlock(function, "entry");
+        LLVMPositionBuilderAtEnd(w->llvm.builder, entry);
         llvm_build_statement(w, function, xx decl->my_block);
         decl->llvm_value = function;
     }

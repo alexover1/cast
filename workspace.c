@@ -170,6 +170,7 @@ void workspace_init(Workspace *w, const char *name)
     w->type_def_type->_expression.inferred_type = w->type_def_type; // And on and on and on...
 
     w->type_def_int = make_integer_type_leaf(w, "int", 8, LLONG_MIN, LLONG_MAX);
+    w->type_def_int->number_flags |= NUMBER_FLAGS_SIGNED;
     w->type_def_u8  = make_integer_type_leaf(w, "u8",  1, 0,         UCHAR_MAX);
     w->type_def_u16 = make_integer_type_leaf(w, "u16", 2, 0,         USHRT_MAX);
     w->type_def_u32 = make_integer_type_leaf(w, "u32", 4, 0,         UINT_MAX);

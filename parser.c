@@ -698,6 +698,18 @@ inline Ast_Block *parse_block(Parser *p)
     return block;
 }
 
+Ast_Statement *parse_assignment(Parser *p, Ast_Expression *pointer_expression)
+{
+    Token token = eat_next_token(p);
+
+    Ast_Assignment *assign = ast_alloc(p, token.location, AST_ASSIGNMENT, sizeof(*assign));
+    assign->pointer = pointer_expression;
+    assign->value = parse_expression(p);
+    assign->operator_type = token.type;
+
+    return xx assign;
+}
+
 Ast_Statement *parse_statement(Parser *p)
 {
     Token token = peek_next_token(p);
@@ -788,10 +800,19 @@ Ast_Statement *parse_statement(Parser *p)
                 
             return NULL;
         }
-        // TODO: Check for '='.
-        // I think once we have pointer dereferencing using the syntax `name.*` then we can just look for '=' after identifiers,
-        // but we still need to call parse_primary_expression() on it because there can be nested field lookup like `a.b.c = 5`.
-        if (token.type == '=') parser_report_error(p, token.location, "Assignment is not implemented yet.");
+
+        // Parse assignment.
+        Ast_Expression *expr = parse_expression(p);
+        token = peek_next_token(p);
+        switch (token.type) {
+        case '=':
+        case TOKEN_PLUSEQUALS:
+        case TOKEN_MINUSEQUALS:
+        case TOKEN_TIMESEQUALS:
+        case TOKEN_DIVEQUALS:
+        case TOKEN_MODEQUALS:
+            return parse_assignment(p, expr);
+        }
     }
 
     Ast_Expression *expr = parse_expression(p);
@@ -1103,7 +1124,9 @@ void print_expr_to_builder(String_Builder *sb, const Ast_Expression *expr, size_
     case AST_BINARY_OPERATOR: {
         const Ast_Binary_Operator *binary = xx expr;
         print_expr_to_builder(sb, binary->left, depth);
+        sb_append_cstr(sb, " ");
         sb_append_cstr(sb, token_type_to_string(binary->operator_type));
+        sb_append_cstr(sb, " ");
         print_expr_to_builder(sb, binary->right, depth);
         break;
     }

@@ -86,11 +86,12 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
             report_error(w, decl->location, "We have a non-constant declaration with no type and no value (this is an internal error).");
         }
 
+        assert(decl->root_expression->inferred_type);
+
         if (decl->root_expression->kind == AST_LITERAL) {
             Ast_Literal *literal = xx decl->root_expression;
             decl->my_type = literal->default_type;
         } else {
-            assert(decl->root_expression->inferred_type);
             decl->my_type = decl->root_expression->inferred_type;
         }
 
@@ -117,12 +118,15 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
         Ast_Literal *literal = context_alloc(sizeof(*literal));
         literal->_expression.kind = AST_LITERAL;
         literal->_expression.location = decl->location;
+        literal->_expression.inferred_type = decl->my_type;
         literal->integer_value = 0; // Works for float, null, & bool also.
         literal->default_type = decl->my_type; // TODO: I think we need to remove default_type from literals.
         literal->number_flags = decl->my_type->number_flags;
 
         decl->root_expression = xx literal;
         decl->flags |= DECLARATION_VALUE_WAS_INFERRED_FROM_TYPE;
+
+        goto done;
     }
 
     if (decl->root_expression->kind == AST_LITERAL) {
@@ -204,6 +208,7 @@ void typecheck_literal(Workspace *w, Ast_Literal *literal, Ast_Type_Definition *
     
     if (types_are_equal(supplied_type, literal->default_type)) {
         // No casting needed.
+        literal->_expression.inferred_type = supplied_type;
         return;
     }
 
@@ -360,7 +365,12 @@ void typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary)
             report_error(w, binary->_expression.location, "Type mismatch: Cannot compare values of different types (got %s and %s).",
                 type_to_string(left), type_to_string(right));
         }
-        break;
+        binary->_expression.inferred_type = w->type_def_bool;
+
+        if (binary_left->kind == AST_LITERAL && binary_right->kind == AST_LITERAL) {
+            binary->_expression.replacement = xx do_binary_constant_literal_folding(w, left, binary->operator_type, xx binary_left, xx binary_right);
+        }
+        return;
     case '>':
     case '<':
     case TOKEN_GREATEREQUALS:
@@ -373,7 +383,13 @@ void typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary)
             report_error(w, binary->left->location, "Type mismatch: Operator '%s' only works on number types (got %s).",
                 token_type_to_string(binary->operator_type), type_to_string(left));
         }
-        break;
+
+        binary->_expression.inferred_type = w->type_def_bool;
+
+        if (binary_left->kind == AST_LITERAL && binary_right->kind == AST_LITERAL) {
+            binary->_expression.replacement = xx do_binary_constant_literal_folding(w, left, binary->operator_type, xx binary_left, xx binary_right);
+        }
+        return;
     case TOKEN_LOGICAL_AND:
     case TOKEN_LOGICAL_OR:
         if (left != w->type_def_bool) {
@@ -483,9 +499,12 @@ void typecheck_expression(Workspace *w, Ast_Expression *expr)
 
 void typecheck_while(Workspace *w, Ast_While *while_stmt)
 {
-    UNUSED(w);
-    UNUSED(while_stmt);
-    UNIMPLEMENTED;
+    // TODO: implicit bool conversions.
+
+    if (while_stmt->condition_expression->inferred_type != w->type_def_bool) {
+        report_error(w, while_stmt->condition_expression->location, "Condition of 'while' statement must result in a boolean value (got %s).",
+            type_to_string(while_stmt->condition_expression->inferred_type));
+    }
 }
 
 void typecheck_if(Workspace *w, Ast_If *if_stmt)
@@ -493,7 +512,8 @@ void typecheck_if(Workspace *w, Ast_If *if_stmt)
     // TODO: implicit bool conversions.
 
     if (if_stmt->condition_expression->inferred_type != w->type_def_bool) {
-        report_error(w, if_stmt->condition_expression->location, "Condition of 'if' statement must result in a boolean value.");
+        report_error(w, if_stmt->condition_expression->location, "Condition of 'if' statement must result in a boolean value (got %s).",
+            type_to_string(if_stmt->condition_expression->inferred_type));
     }
 }
 
@@ -525,9 +545,19 @@ inline void typecheck_variable(Workspace *w, Ast_Variable *var)
 
 void typecheck_assignment(Workspace *w, Ast_Assignment *assign)
 {
-    UNUSED(w);
-    UNUSED(assign);
-    UNIMPLEMENTED;
+    assert(assign->pointer->kind == AST_IDENT); // TODO: a.b.c
+
+    Ast_Ident *ident = xx assign->pointer;
+    if (ident->resolved_declaration->flags & DECLARATION_IS_CONSTANT) {
+        report_error(w, ident->_expression.location, "Cannot assign to constant.");
+    }
+
+    Ast_Type_Definition *expected = assign->pointer->inferred_type;
+    Ast_Type_Definition *actual = assign->value->inferred_type;
+    if (!types_are_equal(actual, expected)) {
+        report_error(w, assign->value->location, "Type mismatch: Wanted %s but got %s.",
+            type_to_string(expected), type_to_string(actual));
+    }
 }
 
 void typecheck_statement(Workspace *w, Ast_Statement *stmt)
@@ -553,8 +583,6 @@ void flatten_expr_for_typechecking(Ast_Declaration *root, Ast_Expression *expr)
 
     switch (expr->kind) {
     case AST_LITERAL:
-        break;
-        // return; // We don't need to be typechecked.
     case AST_IDENT:
         break;
     case AST_UNARY_OPERATOR: {
