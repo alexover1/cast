@@ -228,23 +228,22 @@ Ast_Expression *parse_base_expression(Parser *p)
         
     case TOKEN_NUMBER: {
         eat_next_token(p);
-        Ast_Literal *lit = ast_alloc(p, token.location, AST_LITERAL, sizeof(*lit));
-        lit->number_flags = token.number_flags;
-        if (flag_has(token.number_flags, NUMBER_FLAGS_FLOAT)) {
-            assert(!flag_has(token.number_flags, NUMBER_FLAGS_DOUBLE));
-            lit->default_type = p->workspace->type_def_float;
-            lit->double_value = token.double_value;
+        Ast_Number *number = ast_alloc(p, token.location, AST_NUMBER, sizeof(*number));
+        number->flags = token.number_flags;
+
+        if (token.number_flags & NUMBER_FLAGS_FLOAT) {
+            number->as.real = token.double_value;
         } else {
-            lit->default_type = p->workspace->type_def_int;
-            lit->integer_value = token.integer_value;
+            number->as.integer = token.integer_value;
         }
-        return xx lit;
+
+        return xx number;
     }
         
     case TOKEN_STRING: {
         eat_next_token(p);
         Ast_Literal *lit = ast_alloc(p, token.location, AST_LITERAL, sizeof(*lit));
-        lit->default_type = p->workspace->type_def_string;
+        lit->kind = LITERAL_STRING;
         lit->string_value = token.string_value;
         return xx lit;
     }
@@ -252,24 +251,23 @@ Ast_Expression *parse_base_expression(Parser *p)
     case TOKEN_KEYWORD_TRUE: {
         eat_next_token(p);
         Ast_Literal *lit = ast_alloc(p, token.location, AST_LITERAL, sizeof(*lit));
-        lit->default_type = p->workspace->type_def_bool;
-        lit->integer_value = 1;
+        lit->kind = LITERAL_BOOL;
+        lit->bool_value = 1;
         return xx lit;
     }
 
     case TOKEN_KEYWORD_FALSE: {
         eat_next_token(p);
         Ast_Literal *lit = ast_alloc(p, token.location, AST_LITERAL, sizeof(*lit));
-        lit->default_type = p->workspace->type_def_bool;
-        lit->integer_value = 0;
+        lit->kind = LITERAL_BOOL;
+        lit->bool_value = 0;
         return xx lit;
     }
-        
+
     case TOKEN_KEYWORD_NULL: {
         eat_next_token(p);
         Ast_Literal *lit = ast_alloc(p, token.location, AST_LITERAL, sizeof(*lit));
-        lit->default_type = p->workspace->type_def_void_pointer;
-        lit->integer_value = 0;
+        lit->kind = LITERAL_NULL;
         return xx lit;
     }
         
@@ -398,7 +396,7 @@ Ast_Type_Definition *parse_struct_desc(Parser *p)
 
     Ast_Type_Definition *defn = make_type_definition(p, token.location);
     defn->struct_desc = struct_desc;
-    defn->is_leaf = true;
+    defn->flags = TYPE_IS_LEAF | TYPE_IS_NAMESPACE | TYPE_HAS_STORAGE;
     return defn;
 }
 
@@ -418,7 +416,7 @@ Ast_Type_Definition *parse_enum_defn(Parser *p)
 
     Ast_Type_Definition *defn = make_type_definition(p, token.location);
     defn->enum_defn = enum_defn;
-    defn->is_leaf = true;
+    defn->flags = TYPE_IS_LEAF | TYPE_IS_NAMESPACE;
     return defn;
 }
 
@@ -432,7 +430,7 @@ Ast_Type_Definition *parse_lambda_type(Parser *p)
     Source_Location location = token.location;
 
     Ast_Type_Definition *type_definition = make_type_definition(p, location);
-    type_definition->is_leaf = true;
+    type_definition->flags = TYPE_IS_LEAF;
 
     // Open a scope for the arguments.
     
@@ -551,6 +549,8 @@ Ast_Type_Definition *parse_type_definition(Parser *parser, Ast_Expression *type_
             return defn;
         }
 
+        case AST_NUMBER:
+            parser_report_error(parser, type_expression->location, "Here we expected a type, but we got a number.");
         case AST_LITERAL:
             parser_report_error(parser, type_expression->location, "Here we expected a type, but we got a literal value.");
         case AST_BINARY_OPERATOR:
@@ -1111,17 +1111,30 @@ void print_expr_to_builder(String_Builder *sb, const Ast_Expression *expr, size_
     if (!expr) return;
     while (expr->replacement) expr = expr->replacement;
     switch (expr->kind) {
+    case AST_NUMBER: {
+        const Ast_Number *number = xx expr;
+        if (number->flags & NUMBER_FLAGS_FLOAT) {
+            sb_print(sb, "%f", number->as.real);
+            break;
+        }
+        sb_print(sb, "%lu", number->as.integer);
+        break;
+    }
     case AST_LITERAL: {
         const Ast_Literal *literal = xx expr;
-        if (literal->number_flags & NUMBER_FLAGS_NUMBER) {
-            if (literal->number_flags & NUMBER_FLAGS_FLOAT) {
-                sb_print(sb, "%f", literal->double_value);
-                return;
-            }
-            sb_print(sb, "%lu", literal->integer_value);
-            return;
+        if (literal->kind == LITERAL_BOOL) {
+            sb_append_cstr(sb, literal->bool_value ? "true" : "false");
+            break;
         }
-        // some other type...
+        if (literal->kind == LITERAL_STRING) {
+            sb_append(sb, literal->string_value.data, literal->string_value.count);
+            break;
+        }
+        if (literal->kind == LITERAL_NULL) {
+            sb_append_cstr(sb, "null");
+            break;
+        }
+        // Malformed literal.
         sb_append_cstr(sb, "<literal>");
         break;
     }

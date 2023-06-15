@@ -29,18 +29,44 @@ void workspace_dispose_llvm(Workspace *w)
     LLVMContextDispose(w->llvm.context); // @Bad: Why is this not consistently named?
 }
 
-LLVMTypeRef llvm_get_type(Workspace *w, const Ast_Type_Definition *type_def)
+LLVMTypeRef llvm_get_type(Workspace *w, const Ast_Type_Definition *defn)
 {
     Llvm llvm = w->llvm;
-    assert(type_def);
+    assert(defn);
 
-    if (type_def->struct_desc) {
+    if (defn->flags & TYPE_IS_NUMBER) {
+        if (defn->number_flags & NUMBER_FLAGS_FLOAT) {
+            // Floating-point type.
+            if (defn->number_flags & NUMBER_FLAGS_FLOAT64) return LLVMDoubleTypeInContext(llvm.context);
+            return LLVMFloatTypeInContext(llvm.context);
+        }
+        // Integer type.
+        return LLVMIntTypeInContext(llvm.context, defn->size * 8);
+    }
+
+    if (defn->flags & TYPE_IS_LITERAL) {
+        if (defn == w->type_def_void) return LLVMVoidTypeInContext(llvm.context);
+        
+        switch (defn->literal_kind) {
+        case LITERAL_BOOL: return LLVMInt8TypeInContext(llvm.context);
+        case LITERAL_STRING: {
+            LLVMTypeRef elems[] = {
+                LLVMPointerType(LLVMInt8TypeInContext(llvm.context), 0), // *u8
+                LLVMInt64TypeInContext(llvm.context),                    // s64
+            };
+            return LLVMStructTypeInContext(llvm.context, elems, sizeof(elems)/sizeof(elems[0]), 1); // 1 means packed
+        }
+        case LITERAL_NULL: return LLVMPointerTypeInContext(llvm.context, 0); // opaque
+        }
+    }
+
+    if (defn->struct_desc) {
         // Allocate at least enough for every single declaration in the struct.
-        LLVMTypeRef *field_types = arena_alloc(&temporary_arena, sizeof(LLVMTypeRef) * arrlenu(type_def->struct_desc->block->declarations));
+        LLVMTypeRef *field_types = arena_alloc(&temporary_arena, sizeof(LLVMTypeRef) * arrlenu(defn->struct_desc->block->declarations));
 
         size_t count = 0;
-        For (type_def->struct_desc->block->declarations) {
-            Ast_Declaration *member = type_def->struct_desc->block->declarations[it];
+        For (defn->struct_desc->block->declarations) {
+            Ast_Declaration *member = defn->struct_desc->block->declarations[it];
             if (member->flags & DECLARATION_IS_CONSTANT) continue; // Skip constants.
 
             field_types[count] = llvm_get_type(w, member->my_type);
@@ -50,76 +76,44 @@ LLVMTypeRef llvm_get_type(Workspace *w, const Ast_Type_Definition *type_def)
         return LLVMStructTypeInContext(llvm.context, field_types, count, 1); // 1 means packed
     }
 
-    else if (type_def->enum_defn) {
+    else if (defn->enum_defn) {
         UNIMPLEMENTED;
     }
 
-    else if (type_def->type_name) {       
+    else if (defn->type_name) {       
         UNIMPLEMENTED;
     }
 
-    else if (type_def->struct_call) {
+    else if (defn->struct_call) {
         UNIMPLEMENTED;
     }
 
-    else if (type_def->pointer_to) {
+    else if (defn->pointer_to) {
         // TODO: Handle `***void`
-        if (type_def->pointer_to == w->type_def_void) {
+        if (defn->pointer_to == w->type_def_void) {
             return LLVMPointerTypeInContext(llvm.context, 0); // opaque
         }
 
-        LLVMTypeRef res = llvm_get_type(w, type_def->pointer_to);
-        for (size_t i = 0; i < type_def->pointer_level; ++i) {
+        LLVMTypeRef res = llvm_get_type(w, defn->pointer_to);
+        for (size_t i = 0; i < defn->pointer_level; ++i) {
             res = LLVMPointerType(res, 0);
         }
         return res;
     }
 
-    else if (type_def->literal_name) {
-        if (type_def->number_flags & NUMBER_FLAGS_NUMBER) {
-            if (type_def->number_flags & NUMBER_FLAGS_FLOAT) {
-                // Floating-point type.
-                if (type_def->number_flags & NUMBER_FLAGS_DOUBLE) {
-                    return LLVMDoubleTypeInContext(llvm.context);
-                }
-                return LLVMFloatTypeInContext(llvm.context);
-            } else {
-                // Integer type.
-                return LLVMIntTypeInContext(llvm.context, type_def->size * 8);
-            }
-        }
-
-        else if (type_def == w->type_def_bool) return LLVMInt8TypeInContext(llvm.context);
-        else if (type_def == w->type_def_void) return LLVMVoidTypeInContext(llvm.context);
-        
-        else if (type_def == w->type_def_string) {
-            LLVMTypeRef elems[] = {
-                LLVMPointerType(LLVMInt8TypeInContext(llvm.context), 0), // *u8
-                LLVMInt64TypeInContext(llvm.context),                    // s64
-            };
-            return LLVMStructTypeInContext(llvm.context, elems, sizeof(elems)/sizeof(elems[0]), 1); // 1 means packed
-        }
-
-        else if (type_def == w->type_def_type) {
-            return LLVMPointerTypeInContext(llvm.context, 0);
-        }
-
-        else UNREACHABLE;
+    else if (defn->array_element_type) {
+        assert(defn->array_length > 0); // TODO: handle dynamic array
+        LLVMTypeRef element_type = llvm_get_type(w, defn->array_element_type);
+        return LLVMArrayType(element_type, (unsigned) defn->array_length);
     }
 
-    else if (type_def->array_element_type) {
-        assert(type_def->array_length > 0); // TODO: handle dynamic array
-        LLVMTypeRef element_type = llvm_get_type(w, type_def->array_element_type);
-        return LLVMArrayType(element_type, (unsigned) type_def->array_length);
-    }
-
-    else if (type_def->lambda_return_type) {
-        size_t arg_count = arrlenu(type_def->lambda_argument_types);
+    else if (defn->lambda_return_type) {
+        size_t arg_count = arrlenu(defn->lambda_argument_types);
         LLVMTypeRef *param_types = arena_alloc(&temporary_arena, sizeof(LLVMTypeRef) * arg_count);
-        For (type_def->lambda_argument_types) {
-            param_types[it] = llvm_get_type(w, type_def->lambda_argument_types[it]);
+        For (defn->lambda_argument_types) {
+            param_types[it] = llvm_get_type(w, defn->lambda_argument_types[it]);
         }
-        LLVMTypeRef return_type = llvm_get_type(w, type_def->lambda_return_type);
+        LLVMTypeRef return_type = llvm_get_type(w, defn->lambda_return_type);
         return LLVMFunctionType(return_type, param_types, arg_count, 0); // 0 means not variadic
     }
 
@@ -168,7 +162,7 @@ LLVMOpcode llvm_get_opcode(int operator_type, Ast_Type_Definition *defn, LLVMInt
     case TOKEN_LOGICAL_OR:
         return LLVMOr;
     case TOKEN_ISEQUAL:
-        if (defn->number_flags & NUMBER_FLAGS_NUMBER) {
+        if (defn->flags & TYPE_IS_NUMBER) {
             if (use_float) {
                 *real_predicate = LLVMRealOEQ;
                 return LLVMFCmp;
@@ -179,7 +173,7 @@ LLVMOpcode llvm_get_opcode(int operator_type, Ast_Type_Definition *defn, LLVMInt
         // If we're a structure we need to compare all the fields.
         assert(0);
     case TOKEN_ISNOTEQUAL:
-        if (defn->number_flags & NUMBER_FLAGS_NUMBER) {
+        if (defn->flags & TYPE_IS_NUMBER) {
             if (use_float) {
                 *real_predicate = LLVMRealONE;
                 return LLVMFCmp;
@@ -247,34 +241,21 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
     Llvm llvm = w->llvm;
     while (expr->replacement) expr = expr->replacement;
     switch (expr->kind) {
-    case AST_LITERAL: {
-        const Ast_Literal *lit = xx expr;
+    case AST_NUMBER: {
+        const Ast_Number *number = xx expr;
         LLVMTypeRef type = llvm_get_type(w, expr->inferred_type);
-        assert(type);
-
-        if (expr->inferred_type->number_flags & NUMBER_FLAGS_NUMBER) {
-            if (expr->inferred_type->number_flags & NUMBER_FLAGS_FLOAT) {
-                // Floating-point type.
-                return LLVMConstReal(type, lit->double_value);
-            } else {
-                // Integer type.
-                return LLVMConstInt(type, lit->integer_value, 1);
-            }
+        assert(expr->inferred_type->flags & TYPE_IS_NUMBER);
+        if (expr->inferred_type->number_flags & NUMBER_FLAGS_FLOAT) return LLVMConstReal(type, number->as.real);
+        return LLVMConstInt(type, number->as.integer, 1);
+    }
+    case AST_LITERAL: {
+        const Ast_Literal *lit = xx expr;           
+        LLVMTypeRef type = llvm_get_type(w, expr->inferred_type);
+        switch (lit->kind) {
+        case LITERAL_BOOL:   return LLVMConstInt(type, lit->bool_value, 0);
+        case LITERAL_STRING: return llvm_const_string(llvm, lit->string_value.data, lit->string_value.count);
+        case LITERAL_NULL:   return LLVMConstNull(type);
         }
-
-        if (expr->inferred_type == w->type_def_bool) {
-            return LLVMConstInt(type, lit->integer_value, 0);
-        }
-
-        if (expr->inferred_type == w->type_def_string) {
-            return llvm_const_string(llvm, lit->string_value.data, lit->string_value.count);
-        }
-
-        if (expr->inferred_type == w->type_def_type) {
-            UNIMPLEMENTED;
-        }
-
-        UNREACHABLE;
     }
     case AST_IDENT: {
         const Ast_Ident *ident = xx expr;
@@ -299,7 +280,7 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
         LLVMValueRef RHS = llvm_build_expression(w, binary->right);
         LLVMIntPredicate int_predicate;
         LLVMRealPredicate real_predicate;
-        LLVMOpcode opcode = llvm_get_opcode(binary->operator_type, expr->inferred_type, &int_predicate, &real_predicate);
+        LLVMOpcode opcode = llvm_get_opcode(binary->operator_type, binary->left->inferred_type, &int_predicate, &real_predicate);
         if (opcode == LLVMICmp) {
             return LLVMBuildICmp(llvm.builder, int_predicate, LHS, RHS, "");
         }

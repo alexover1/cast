@@ -107,10 +107,9 @@ typedef struct {
 enum {
     NUMBER_FLAGS_BINARY = 0x1,
     NUMBER_FLAGS_HEX = 0x2,
-    NUMBER_FLAGS_NUMBER = 0x4, // So that zero'd flags is not a number.
-    NUMBER_FLAGS_FLOAT = 0x8,
-    NUMBER_FLAGS_DOUBLE = 0x10,
-    NUMBER_FLAGS_SIGNED = 0x20,
+    NUMBER_FLAGS_FLOAT = 0x4,
+    NUMBER_FLAGS_FLOAT64 = 0x8,
+    NUMBER_FLAGS_SIGNED = 0x10, // Explicit + or -
 };
 
 typedef struct {

@@ -64,19 +64,16 @@ typedef struct {
     int64_t element_count; // -1 for slice
 } Type_Info_Array;
 
-void flatten_expr_for_typechecking(Ast_Declaration *root, Ast_Expression *expr);
-void flatten_stmt_for_typechecking(Ast_Declaration *root, Ast_Statement *stmt);
-void flatten_decl_for_typechecking(Ast_Declaration *decl);
+void typecheck_declaration(Workspace *w, Ast_Declaration *decl);
 
-bool types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y);
-bool pointer_types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y);
-
-Ast_Expression *autocast_to_bool(Workspace *w, Ast_Expression *expr);
-
-void typecheck_literal(Workspace *w, Ast_Literal *literal, Ast_Type_Definition *supplied_type);
+void typecheck_number(Workspace *w, Ast_Number *number, Ast_Type_Definition *supplied_type);
+void typecheck_literal(Workspace *w, Ast_Literal *literal);
 void typecheck_identifier(Workspace *w, Ast_Ident *ident);
 void typecheck_unary_operator(Workspace *w, Ast_Unary_Operator *unary);
 void typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary);
+void typecheck_lambda(Workspace *w, Ast_Lambda *lambda);
+void typecheck_procedure_call(Workspace *w, Ast_Procedure_Call *call);
+void typecheck_definition(Workspace *w, Ast_Type_Definition *defn);
 void typecheck_expression(Workspace *w, Ast_Expression *expression);
 
 void typecheck_while(Workspace *w, Ast_While *while_stmt);
@@ -87,4 +84,18 @@ void typecheck_variable(Workspace *w, Ast_Variable *var);
 void typecheck_assignment(Workspace *w, Ast_Assignment *assign);
 void typecheck_statement(Workspace *w, Ast_Statement *statement);
 
-void typecheck_declaration(Workspace *w, Ast_Declaration *decl);
+Ast_Expression *autocast_to_bool(Workspace *w, Ast_Expression *expr);
+Ast_Expression *fold_binary_arithmetic_or_comparison(Workspace *w, char operator_type, Ast_Number *left, Ast_Number *right);
+Ast_Type_Definition *typecheck_binary_arithmetic(Workspace *w, char operator_type, Source_Location site, Ast_Expression *left, Ast_Expression *right);
+
+void flatten_expr_for_typechecking(Ast_Declaration *root, Ast_Expression *expr);
+void flatten_stmt_for_typechecking(Ast_Declaration *root, Ast_Statement *stmt);
+void flatten_decl_for_typechecking(Ast_Declaration *decl);
+
+bool types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y);
+bool pointer_types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y);
+
+Ast_Literal *make_literal(Literal_Kind kind);
+Ast_Literal *make_boolean(Workspace *w, Source_Location loc, bool value);
+Ast_Number *make_float_or_float64(Workspace *w, Source_Location loc, double value, bool use_float64);
+Ast_Number *make_integer(Workspace *w, Source_Location loc, unsigned long value, bool is_signed);

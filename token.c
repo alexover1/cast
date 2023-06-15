@@ -168,7 +168,6 @@ Token find_next_token(Parser *parser)
     if (isdigit(c)) {
         String_View literal = sv_chop_left_while(&parser->current_line, continues_identifier);
         token.location.c1 = parser_current_character_index(parser);
-        token.number_flags = NUMBER_FLAGS_NUMBER;
         if (!parse_int_value(literal, 10, &token.integer_value)) {
             parser_report_error(parser, token.location, "Illegal characters in number literal.");
         }

@@ -62,7 +62,5 @@ void llvm_build_declaration(Workspace *w, Ast_Declaration *decl);
 
 // Random helper functions:
 
-Ast_Literal *make_literal(Ast_Type_Definition *default_type, unsigned long value);
-Ast_Literal *make_integer_literal(Ast_Type_Definition *int_type, unsigned long value);
-Ast_Literal *make_float_literal(Ast_Type_Definition *float_type, double value);
-Ast_Literal *make_string_literal(Ast_Type_Definition *string_type, String_View value);
+Ast_Number *make_number(unsigned long value);
+Ast_Number *make_number_float(double value);

@@ -44,14 +44,15 @@ typedef struct Ast_Type_Definition Ast_Type_Definition;
 typedef struct Ast_Declaration Ast_Declaration;
 
 typedef enum {
-    AST_LITERAL = 1,
-    AST_IDENT = 2,
-    AST_UNARY_OPERATOR = 3,
-    AST_BINARY_OPERATOR = 4,
-    AST_LAMBDA = 5,
-    AST_PROCEDURE_CALL = 6,
-    AST_TYPE_DEFINITION = 7,
-    AST_CAST = 8,
+    AST_NUMBER = 1,
+    AST_LITERAL = 2,
+    AST_IDENT = 3,
+    AST_UNARY_OPERATOR = 4,
+    AST_BINARY_OPERATOR = 5,
+    AST_LAMBDA = 6,
+    AST_PROCEDURE_CALL = 7,
+    AST_TYPE_DEFINITION = 8,
+    AST_CAST = 9,
 } Ast_Expression_Kind;
 
 struct Ast_Expression {
@@ -95,10 +96,11 @@ struct Ast_Node {
 };
 
 typedef enum {
-    BLOCK_BELONGS_TO_LAMBDA,
-    BLOCK_BELONGS_TO_STRUCT,
-    BLOCK_BELONGS_TO_ENUM,
-    BLOCK_IS_LAMBDA_ARGUMENTS,
+    BLOCK_BELONGS_TO_FILE = 1,
+    BLOCK_BELONGS_TO_LAMBDA = 2,
+    BLOCK_BELONGS_TO_STRUCT = 3,
+    BLOCK_BELONGS_TO_ENUM = 4,
+    BLOCK_IS_LAMBDA_ARGUMENTS = 5,
 } Ast_Block_Kind;
 
 struct Ast_Block {
@@ -115,14 +117,31 @@ struct Ast_Block {
 
 // BEGIN EXPRESSIONS
 
+// This is technically a literal, but it's so common that we want to check if a literal is a number,
+// that it's more useful if we separate it.
+typedef struct {
+    Ast_Expression _expression;
+
+    unsigned int flags; // Stores information about the value, for example if it is signed or has a fractional part.
+    union {
+        unsigned long integer;
+        double real;
+    } as;
+} Ast_Number;
+
+typedef enum {
+    LITERAL_BOOL = 1,
+    LITERAL_STRING = 2,
+    LITERAL_NULL = 3,
+} Literal_Kind;
+
 typedef struct {
     Ast_Expression _expression;
     
-    Ast_Type_Definition *default_type; // If we cannot be inferred, this is our type.
-    unsigned int number_flags;
+    // Ast_Type_Definition *default_type; // If we cannot be inferred, this is our type.
+    Literal_Kind kind;
     union {
-        unsigned long integer_value;
-        double double_value;
+        bool bool_value;
         String_View string_value;
     };
 } Ast_Literal;
@@ -179,6 +198,14 @@ struct Ast_Enum {
     Ast_Block *block;
 };
 
+enum {
+    TYPE_IS_LEAF = 0x1,
+    TYPE_IS_NUMBER = 0x2,
+    TYPE_IS_LITERAL = 0x4,
+    TYPE_IS_NAMESPACE = 0x8,
+    TYPE_HAS_STORAGE = 0x10,
+};
+
 struct Ast_Type_Definition {
     Ast_Expression _expression;
 
@@ -191,11 +218,14 @@ struct Ast_Type_Definition {
     size_t pointer_level;
     Ast_Type_Definition *pointer_to;
 
-    // If a numeric type.
+    // If a built-in literal type.
     const char *literal_name;
+    Literal_Kind literal_kind;
+
+    // If a numeric type.
     unsigned long number_flags;
-    Ast_Literal *number_literal_low;
-    Ast_Literal *number_literal_high;
+    Ast_Number *number_literal_low;
+    Ast_Number *number_literal_high;
 
     // If an array
     long long array_length;
@@ -206,7 +236,7 @@ struct Ast_Type_Definition {
     Ast_Type_Definition *lambda_return_type;
     Ast_Type_Definition **lambda_argument_types; // Pointers to the lambda's argument declarations, not copies.
 
-    bool is_leaf;
+    unsigned char flags;
     int size; // Size in bytes of storage for this type.
 };
 
