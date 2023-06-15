@@ -80,6 +80,7 @@ const char *token_type_to_string(int type);
 typedef struct {
     int l0, l1; // line range
     int c0, c1; // character range
+    int fid; // file index
 } Source_Location;
 
 #ifndef _WIN32
@@ -100,7 +101,7 @@ typedef struct {
         String_View string_value; // Must be copied to save in AST.
     };
 
-    uint32_t number_flags; // If a number.
+    unsigned int number_flags; // If a number.
 } Token;
 
 enum {
@@ -111,3 +112,12 @@ enum {
     NUMBER_FLAGS_DOUBLE = 0x10,
     NUMBER_FLAGS_SIGNED = 0x20,
 };
+
+typedef struct {
+    String_View name, path;
+    char *data; // @Copy @Owned
+    size_t size;
+    String_View *lines; // Points into this->data
+} Source_File;
+
+Source_File os_read_entire_file(const char *path_as_cstr);

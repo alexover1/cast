@@ -1,6 +1,12 @@
-main :: () -> int {
-    flag := true || false;
+check_flag :: () -> int {
+    byte: u8 = 5000;
 
-    if flag return 69;
+    flag := true;    
+    if flag return N;
     return 420;
 }
+
+
+
+
+N :: 500;

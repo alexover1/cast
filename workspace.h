@@ -16,7 +16,9 @@ struct Workspace {
     const char *name;
     Llvm llvm;
     Ast_Declaration **declarations;
-    Ast **typecheck_queue;
+    Ast_Expression **typecheck_queue;
+
+    Source_File *files;
 
     Ast_Literal *literal_true;
     Ast_Literal *literal_false;
@@ -41,23 +43,30 @@ struct Workspace {
     Ast_Type_Definition *type_def_type;
 };
 
-Workspace create_workspace(const char *name);
+void workspace_init(Workspace *w, const char *name);
 void workspace_add_file(Workspace *w, const char *path_as_cstr);
 void workspace_add_string(Workspace *w, String_View input);
 void workspace_typecheck(Workspace *w);
 void workspace_llvm(Workspace *w);
 
+void report_error(Workspace *workspace, Source_Location location, const char *format, ...);
+
 // LLVM stuff:
 
 void workspace_setup_llvm(Workspace *w);
 void workspace_dispose_llvm(Workspace *w);
-LLVMValueRef llvm_const_string(Llvm llvm, const char *data, size_t count);
+
 LLVMValueRef llvm_get_named_value(LLVMValueRef function, const char *name);
-LLVMTypeRef llvm_create_type(Workspace *w, const Ast_Type_Definition *type_def);
-LLVMValueRef llvm_build_value(Workspace *w, LLVMValueRef function, Ast *ast);
+LLVMTypeRef llvm_get_type(Workspace *w, const Ast_Type_Definition *type_def);
+LLVMOpcode llvm_get_opcode(int operator_type, Ast_Type_Definition *defn, LLVMIntPredicate *int_predicate, LLVMRealPredicate *real_predicate);
 
-// Random helper functions
+LLVMValueRef llvm_const_string(Llvm llvm, const char *data, size_t count);
+LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr);
+void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *stmt);
 
-Ast_Literal *make_integer_literal(Ast_Type_Definition *type_def, unsigned long value);
-Ast_Literal *make_float_literal(Ast_Type_Definition *type_def, double value);
-Ast_Literal *make_string_literal(Workspace *w, String_View value);
+// Random helper functions:
+
+Ast_Literal *make_literal(Ast_Type_Definition *default_type, unsigned long value);
+Ast_Literal *make_integer_literal(Ast_Type_Definition *int_type, unsigned long value);
+Ast_Literal *make_float_literal(Ast_Type_Definition *float_type, double value);
+Ast_Literal *make_string_literal(Ast_Type_Definition *string_type, String_View value);

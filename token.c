@@ -17,12 +17,15 @@
 
 #include "common.h"
 #include "parser.h"
+#include "workspace.h"
 #include "string_builder.h"
 #include "vendor/stb_ds.h"
 
-Token find_next_token(Parser *parser); // @Interal
-void parser_next_line(Parser *parser); // @Interal
-Source_Location parser_current_location(Parser *parser); // @Interal
+// All of these are @Internal.
+Token find_next_token(Parser *parser);
+void parser_next_line(Parser *parser);
+Source_Location parser_current_location(Parser *parser);
+void parser_add_line_to_source_file(Parser *parser);
 
 #define parser_current_character_index(parser) ((parser)->current_line.data - (parser)->current_line_start)
 
@@ -115,10 +118,19 @@ static Token_Type parse_keyword_or_ident_token_type(String_View s)
     return TOKEN_IDENT;
 }
 
+inline void parser_add_line_to_source_file(Parser *parser)
+{
+    String_View added_line = parser->current_line;
+    added_line.count += 1; // To include the newline.
+    arrput(parser->workspace->files[parser->file_index].lines, added_line);
+}
+
 inline void parser_next_line(Parser *parser)
 {
     parser->current_line = sv_chop_by_delim(&parser->current_input, '\n');
-    arrput(parser->lines, sv_from_parts(parser->current_line.data, parser->current_line.count + 1)); // Include newline.
+
+    parser_add_line_to_source_file(parser);
+
     parser->current_line_start = parser->current_line.data;
     parser->current_line = sv_trim_left(parser->current_line);
     parser->current_line_number += 1;
@@ -131,6 +143,7 @@ inline Source_Location parser_current_location(Parser *parser)
     loc.l1 = -1;
     loc.c0 = parser_current_character_index(parser);
     loc.c1 = -1;
+    loc.fid = parser->file_index;
     return loc;
 }
 

@@ -24,11 +24,21 @@ int main(int argc, char **argv)
 
     const char *input_path = shift_args(&argc, &argv);
 
-    Workspace w0 = create_workspace("My Program");
+    Workspace w0;
+    workspace_init(&w0, "My Program");
     workspace_add_file(&w0, input_path);
     workspace_typecheck(&w0);
+
+    String_Builder sb = {0};
+    For (w0.declarations) {
+        Ast_Declaration *decl = w0.declarations[it];
+        print_decl_to_builder(&sb, decl);
+        sb_append_cstr(&sb, "\n");
+    }
+    printf(SV_Fmt, SV_Arg(sb));
+
     workspace_setup_llvm(&w0);
-    workspace_llvm(&w0);
+    // workspace_llvm(&w0);
 
     LLVMDumpModule(w0.llvm.module);
     workspace_dispose_llvm(&w0);
@@ -59,6 +69,5 @@ char *shift_args(int *argc, char ***argv)
 #define STB_SPRINTF_IMPLEMENTATION
 #include "vendor/stb_sprintf.h"
 
-// TODO: It's really easy to check for a procedure when parsing.
-//       Right after we parse a parentheses expression, just check
-//       if the next token is a "->" token. (or check for "{")
+
+// TODO:  `sin : (theta: float) -> float; `

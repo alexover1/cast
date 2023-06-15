@@ -64,16 +64,23 @@ typedef struct {
     int64_t element_count; // -1 for slice
 } Type_Info_Array;
 
-void flatten_for_typechecking(Workspace *w, Ast *ast);
+void flatten_expr_for_typechecking(Ast_Declaration *root, Ast_Expression *expr);
+void flatten_stmt_for_typechecking(Ast_Declaration *root, Ast_Statement *stmt);
+void flatten_decl_for_typechecking(Ast_Declaration *decl);
 
 bool types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y);
 bool pointer_types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y);
 
-void typecheck_literal(Workspace *w, Ast_Literal *literal);
-void typecheck_literal_as_type(Workspace *w, Ast_Literal *literal, Ast_Type_Definition *type_def);
+Ast_Expression *autocast_to_bool(Workspace *w, Ast_Expression *expr);
+
+void typecheck_literal(Workspace *w, Ast_Literal *literal, Ast_Type_Definition *supplied_type);
 void typecheck_identifier(Workspace *w, Ast_Ident *ident);
 void typecheck_unary_operator(Workspace *w, Ast_Unary_Operator *unary);
 void typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary);
-void typecheck_ast(Workspace *w, Ast *ast);
+void typecheck_expression(Workspace *w, Ast_Expression *expression);
 
-void report_error(Ast *ast, const char *format, ...);
+void typecheck_variable(Workspace *w, Ast_Variable *var);
+void typecheck_assignment(Workspace *w, Ast_Assignment *assign);
+void typecheck_statement(Workspace *w, Ast_Statement *statement);
+
+void typecheck_declaration(Workspace *w, Ast_Declaration *decl);

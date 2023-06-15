@@ -13,6 +13,7 @@ typedef struct {
 #define SB_INIT_CAP 128
 #endif
 
+void sb_reserve(String_Builder *sb, size_t amount);
 void sb_append(String_Builder *sb, const char *items, size_t items_count);
 void sb_append_cstr(String_Builder *sb, const char *cstr);
 void sb_print(String_Builder *sb, const char *fmt, ...);
@@ -27,9 +28,9 @@ void sb_print(String_Builder *sb, const char *fmt, ...);
 
 #include "vendor/context_alloc.h"
 
-static void sb_maybe_grow(String_Builder *sb, size_t new_items_count)
+void sb_reserve(String_Builder *sb, size_t amount)
 {
-    size_t n = sb->count + new_items_count;
+    size_t n = sb->count + amount;
     size_t oldsz = sb->capacity;
 
     if (n > sb->capacity) {
@@ -44,7 +45,7 @@ static void sb_maybe_grow(String_Builder *sb, size_t new_items_count)
 
 void sb_append(String_Builder *b, const char *items, size_t items_count)
 {
-    sb_maybe_grow(b, items_count);
+    sb_reserve(b, items_count);
     if (items != NULL) memcpy(b->data + b->count, items, items_count*sizeof(*b->data));
     b->count += items_count;
 }
