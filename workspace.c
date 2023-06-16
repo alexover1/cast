@@ -21,7 +21,7 @@ static Ast_Type_Definition *make_type_leaf(Workspace *w, const char *literal_nam
 static Ast_Type_Definition *make_integer_type_leaf(Workspace *w, const char *literal_name, int size_in_bytes, bool is_signed, unsigned long low, unsigned long high)
 {
     Ast_Type_Definition *defn = make_type_leaf(w, literal_name, size_in_bytes);
-    defn->flags |= TYPE_IS_NUMBER;
+    defn->flags |= TYPE_IS_NUMERIC;
     defn->number_literal_low = make_number(low);
     defn->number_literal_high = make_number(high);
     if (is_signed) {
@@ -35,7 +35,7 @@ static Ast_Type_Definition *make_integer_type_leaf(Workspace *w, const char *lit
 static Ast_Type_Definition *make_float_type_leaf(Workspace *w, const char *literal_name, int size_in_bytes, bool requires_float64, double low, double high)
 {
     Ast_Type_Definition *defn = make_type_leaf(w, literal_name, size_in_bytes);
-    defn->flags |= TYPE_IS_NUMBER;
+    defn->flags |= TYPE_IS_NUMERIC;
     defn->number_flags = NUMBER_FLAGS_FLOAT;
     defn->number_literal_low = make_number_float(low);
     defn->number_literal_high = make_number_float(high);

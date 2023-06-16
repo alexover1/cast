@@ -34,7 +34,7 @@ LLVMTypeRef llvm_get_type(Workspace *w, const Ast_Type_Definition *defn)
     Llvm llvm = w->llvm;
     assert(defn);
 
-    if (defn->flags & TYPE_IS_NUMBER) {
+    if (defn->flags & TYPE_IS_NUMERIC) {
         if (defn->number_flags & NUMBER_FLAGS_FLOAT) {
             // Floating-point type.
             if (defn->number_flags & NUMBER_FLAGS_FLOAT64) return LLVMDoubleTypeInContext(llvm.context);
@@ -162,7 +162,7 @@ LLVMOpcode llvm_get_opcode(int operator_type, Ast_Type_Definition *defn, LLVMInt
     case TOKEN_LOGICAL_OR:
         return LLVMOr;
     case TOKEN_ISEQUAL:
-        if (defn->flags & TYPE_IS_NUMBER) {
+        if (defn->flags & TYPE_IS_NUMERIC) {
             if (use_float) {
                 *real_predicate = LLVMRealOEQ;
                 return LLVMFCmp;
@@ -173,7 +173,7 @@ LLVMOpcode llvm_get_opcode(int operator_type, Ast_Type_Definition *defn, LLVMInt
         // If we're a structure we need to compare all the fields.
         assert(0);
     case TOKEN_ISNOTEQUAL:
-        if (defn->flags & TYPE_IS_NUMBER) {
+        if (defn->flags & TYPE_IS_NUMERIC) {
             if (use_float) {
                 *real_predicate = LLVMRealONE;
                 return LLVMFCmp;
@@ -244,7 +244,7 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
     case AST_NUMBER: {
         const Ast_Number *number = xx expr;
         LLVMTypeRef type = llvm_get_type(w, expr->inferred_type);
-        assert(expr->inferred_type->flags & TYPE_IS_NUMBER);
+        assert(expr->inferred_type->flags & TYPE_IS_NUMERIC);
         if (expr->inferred_type->number_flags & NUMBER_FLAGS_FLOAT) return LLVMConstReal(type, number->as.real);
         return LLVMConstInt(type, number->as.integer, 1);
     }

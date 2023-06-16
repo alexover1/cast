@@ -89,12 +89,6 @@ struct Ast_Statement {
     // Ast_Block *block;
 };
 
-// This is so we can store a flattened list of nodes for typechecking.
-struct Ast_Node {
-    Ast_Expression *expression;
-    Ast_Statement *statement;
-};
-
 typedef enum {
     BLOCK_BELONGS_TO_FILE = 1,
     BLOCK_BELONGS_TO_LAMBDA = 2,
@@ -200,7 +194,7 @@ struct Ast_Enum {
 
 enum {
     TYPE_IS_LEAF = 0x1,
-    TYPE_IS_NUMBER = 0x2,
+    TYPE_IS_NUMERIC = 0x2,
     TYPE_IS_LITERAL = 0x4,
     TYPE_IS_NAMESPACE = 0x8,
     TYPE_HAS_STORAGE = 0x10,
@@ -335,6 +329,12 @@ enum {
     DECLARATION_TYPE_WAS_INFERRED_FROM_EXPRESSION = 0x80,
     DECLARATION_VALUE_WAS_INFERRED_FROM_TYPE = 0x100, // Default value (zero) was added.
     DECLARATION_HAS_BEEN_TYPECHECKED = 0x200,
+};
+
+// This is so we can store a flattened list of nodes for typechecking.
+struct Ast_Node {
+    Ast_Expression *expression;
+    Ast_Statement *statement;
 };
 
 struct Ast_Declaration {

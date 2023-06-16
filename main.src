@@ -1,23 +1,11 @@
 check_flag :: () -> int {
     flag := true;
-    if flag return N;
+    if flag return 60;
     return 420;
+
+    m: int;
+    m = 69;
 }
 
-looping :: () {
-    i := 0;
-    while i < N {
-        i += 1;
-    }
-}
-
-print_integer :: (number: int) {
-    while number > 0 {
-        number /= BASE;
-    }
-
-    BASE :: 10;
-}
-
-N :: 500;
-GO_BANANAS :: false;
+N : u8 : 255;
+M : int : 0;

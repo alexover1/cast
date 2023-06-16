@@ -8,8 +8,6 @@
     while (ast->replacement) ast = ast->replacement; \
 } while(0)
 
-#define Wait_On(expr) if ((expr)->inferred_type == NULL) return
-
 void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
 {
 #if 0
@@ -22,24 +20,27 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
     
     // Note: None of this gets set for non-constants, which is totally fine.
     while (decl->typechecking_position < arrlenu(decl->flattened)) {
-        Ast_Node node = decl->flattened[decl->typechecking_position];
-        if (node.expression) {
-            typecheck_expression(w, node.expression);            
-            if (node.expression->inferred_type) {
+        Ast_Node *node = &decl->flattened[decl->typechecking_position];
+        if (node->expression) {
+            typecheck_expression(w, node->expression);
+            Replace(node->expression);
+            if (node->expression->inferred_type) {
                 decl->typechecking_position += 1;
             } else {
                 // Hit a roadblock.
-                printf("$$$ %s\n", expr_to_string(node.expression));
+                Source_Location loc = node->expression->location;
+                printf("$$$ "Loc_Fmt": %s\n", SV_Arg(w->files[loc.fid].path), Loc_Arg(loc), expr_to_string(node->expression));
                 return;
             }
         }
-        if (node.statement) {
-            typecheck_statement(w, node.statement);
-            if (node.statement->typechecked) {
+        if (node->statement) {
+            typecheck_statement(w, node->statement);
+            if (node->statement->typechecked) {
                 decl->typechecking_position += 1;
             } else {
-                // Hit a roadblock.
-                printf("$$$ %s\n", stmt_to_string(node.statement));
+                // Currently this can never happen because we can never wait on statements.
+                // Their inner expressions are typechecked before they are.
+                printf("$$$ %s\n", stmt_to_string(node->statement));
                 return;
             }
         }
@@ -60,6 +61,7 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
             report_error(w, decl->location, "We have a non-constant declaration with no type and no value (this is an internal error).");
         }
 
+        Replace(decl->root_expression);
         assert(decl->root_expression->inferred_type);
 
         if (decl->root_expression->kind == AST_LITERAL) {
@@ -98,7 +100,7 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
         // Otherwise, we're a literal.
         assert(decl->my_type->flags & TYPE_IS_LITERAL);
 
-        if (decl->my_type->flags & TYPE_IS_NUMBER) {
+        if (decl->my_type->flags & TYPE_IS_NUMERIC) {
             decl->root_expression = xx make_number(0);
         } else {
             decl->root_expression = xx make_literal(decl->my_type->literal_kind);
@@ -109,6 +111,8 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
         decl->flags |= DECLARATION_VALUE_WAS_INFERRED_FROM_TYPE;
         goto done;
     }
+
+    Replace(decl->root_expression);
 
     if (decl->root_expression->kind == AST_LITERAL) {
         // TODO: String to char.
@@ -179,7 +183,7 @@ void typecheck_number(Workspace *w, Ast_Number *number, Ast_Type_Definition *sup
         return;
     }
 
-    if (!(supplied_type->flags & TYPE_IS_NUMBER)) {
+    if (!(supplied_type->flags & TYPE_IS_NUMERIC)) {
         report_error(w, number->_expression.location, "Type mismatch: Wanted %s but got a number literal.", type_to_string(supplied_type));
     }
 
@@ -200,9 +204,24 @@ void typecheck_number(Workspace *w, Ast_Number *number, Ast_Type_Definition *sup
     }
 
     // We know the type is an integer, so let's compare the range.
+
+    if (supplied_type->number_flags & NUMBER_FLAGS_SIGNED) {
+        signed long low = supplied_type->number_literal_low->as.integer;
+        signed long high = supplied_type->number_literal_high->as.integer;
+        signed long value = number->as.integer;
+        if (value > high) {
+            report_error(w, number->_expression.location, "Numeric constant too big for type (max for %s is %lu).", supplied_type->literal_name, high);
+        }
+        if (value < low) {
+            report_error(w, number->_expression.location, "Numeric constant too small for type (min for %s is %lu).", supplied_type->literal_name, low);
+        }
+        goto done;
+    }
     
     unsigned long low = supplied_type->number_literal_low->as.integer;
     unsigned long high = supplied_type->number_literal_high->as.integer;
+
+    // TODO: we need to compare differently based on signedness.
     
     if (number->as.integer > high) {
         report_error(w, number->_expression.location, "Numeric constant too big for type (max for %s is %lu).", supplied_type->literal_name, high);
@@ -392,7 +411,7 @@ Ast_Type_Definition *typecheck_binary_arithmetic(Workspace *w, char operator_typ
             }
         } else {
             // Pointer and integer.
-            if (!(right->inferred_type->flags & TYPE_IS_NUMBER)) {
+            if (!(right->inferred_type->flags & TYPE_IS_NUMERIC)) {
                 report_error(w, right->location, "Type mismatch: Pointer arithmetic operand must be a number (got %s).",
                     type_to_string(right->inferred_type));
             }
@@ -413,7 +432,7 @@ Ast_Type_Definition *typecheck_binary_arithmetic(Workspace *w, char operator_typ
 
     Ast_Type_Definition *defn = left->inferred_type; // Now they are the same.
 
-    if (!(defn->flags & TYPE_IS_NUMBER)) {
+    if (!(defn->flags & TYPE_IS_NUMERIC)) {
         report_error(w, site, "Type mismatch: Operator '%s' does not work on non-number types (got %s).",
             token_type_to_string(operator_type), type_to_string(defn));
     }
@@ -432,7 +451,7 @@ void typecheck_binary_comparison(Workspace *w, char operator_type, Source_Locati
 
     Ast_Type_Definition *defn = left->inferred_type; // Now they are the same.
 
-    if (!(defn->flags & TYPE_IS_NUMBER)) {
+    if (!(defn->flags & TYPE_IS_NUMERIC)) {
         report_error(w, site, "Type mismatch: Operator '%s' does not work on non-number types (got %s).",
             token_type_to_string(operator_type), type_to_string(defn));
     }
@@ -532,8 +551,7 @@ void typecheck_cast(Workspace *w, Ast_Cast *cast)
 
 void typecheck_expression(Workspace *w, Ast_Expression *expr)
 {
-    while (expr->replacement) expr = expr->replacement;
-    if (expr->inferred_type) return;
+    if (expr->inferred_type) return; // TODO: replace this with an assert and see if this ever happens.
     switch (expr->kind) {
     case AST_NUMBER:             typecheck_number(w, xx expr, NULL);    break;
     case AST_LITERAL:            typecheck_literal(w, xx expr);         break;
@@ -551,6 +569,8 @@ void typecheck_while(Workspace *w, Ast_While *while_stmt)
 {
     // TODO: implicit bool conversions.
 
+    Replace(while_stmt->condition_expression);
+
     if (while_stmt->condition_expression->inferred_type != w->type_def_bool) {
         report_error(w, while_stmt->condition_expression->location, "Condition of 'while' statement must result in a boolean value (got %s).",
             type_to_string(while_stmt->condition_expression->inferred_type));
@@ -561,6 +581,8 @@ void typecheck_if(Workspace *w, Ast_If *if_stmt)
 {
     // TODO: implicit bool conversions.
 
+    Replace(if_stmt->condition_expression);
+
     if (if_stmt->condition_expression->inferred_type != w->type_def_bool) {
         report_error(w, if_stmt->condition_expression->location, "Condition of 'if' statement must result in a boolean value (got %s).",
             type_to_string(if_stmt->condition_expression->inferred_type));
@@ -570,7 +592,6 @@ void typecheck_if(Workspace *w, Ast_If *if_stmt)
 void typecheck_return(Workspace *w, Ast_Return *ret)
 {
     UNUSED(w);
-    Wait_On(ret->subexpression);
 
     Ast_Type_Definition *expected_type = ret->lambda_i_belong_to->type_definition->lambda_return_type;
     Ast_Type_Definition *actual_type = ret->subexpression->inferred_type;
