@@ -17,7 +17,7 @@ check_flag :: () -> int {
     return 420;
 }
 
-_start :: () -> int {
+main :: () -> int {
     fibonacci(5);
     return 0;
 }
