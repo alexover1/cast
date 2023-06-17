@@ -126,7 +126,7 @@ void workspace_typecheck(Workspace *w)
 
         flatten_decl_for_typechecking(decl);
         arrput(queue, decl);
-#if 1
+#if 0
         String_Builder sb = {0};
         print_decl_to_builder(&sb, decl, 0);
         sb_append_cstr(&sb, "\n");
@@ -176,6 +176,22 @@ void workspace_llvm(Workspace *w)
         if (!(decl->flags & DECLARATION_IS_CONSTANT)) continue;
 
         llvm_build_declaration(w, decl);
+    }
+}
+
+void workspace_save(Workspace *w, const char *ir_path, const char *asm_path)
+{
+    char *error_message = NULL;
+
+    LLVMPrintModuleToFile(w->llvm.module, ir_path, &error_message);
+    if (error_message) {
+        fprintf(stderr, "Error: Could not output LLVM module to file '%s': %s.\n", ir_path, error_message);
+        LLVMDisposeMessage(error_message);
+    }
+
+    if (LLVMTargetMachineEmitToFile(w->llvm.target_machine, w->llvm.module, asm_path, LLVMObjectFile, &error_message) != 0) {
+        fprintf(stderr, "Error: Could not output object file '%s': %s.\n", asm_path, error_message);
+        LLVMDisposeMessage(error_message);
     }
 }
 

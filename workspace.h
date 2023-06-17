@@ -2,6 +2,14 @@
 
 #include <llvm-c/Core.h>
 #include <llvm-c/Target.h>
+#include <llvm-c/Analysis.h>
+#include <llvm-c/TargetMachine.h>
+
+#ifndef _WIN32
+#define LLVM_TARGET_TRIPLE "x86_64-pc-linux-gnu"
+#else
+#define LLVM_TARGET_TRIPLE "x86_64-pc-windows"
+#endif
 
 #include "parser.h"
 #include "typecheck.h"
@@ -10,6 +18,7 @@ typedef struct {
     LLVMContextRef context;
     LLVMModuleRef module;
     LLVMBuilderRef builder;
+    LLVMTargetMachineRef target_machine;
 } Llvm;
 
 struct Workspace {
@@ -43,6 +52,7 @@ void workspace_add_file(Workspace *w, const char *path_as_cstr);
 void workspace_add_string(Workspace *w, String_View input);
 void workspace_typecheck(Workspace *w);
 void workspace_llvm(Workspace *w);
+void workspace_save(Workspace *w, const char *ir_path, const char *asm_path);
 
 void report_error(Workspace *workspace, Source_Location location, const char *format, ...);
 

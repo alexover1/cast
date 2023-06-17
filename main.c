@@ -36,11 +36,9 @@ int main(int argc, char **argv)
     printf(SV_Fmt, SV_Arg(sb));
 #endif
     workspace_typecheck(&w0);
-
     workspace_setup_llvm(&w0);
     workspace_llvm(&w0);
-
-    LLVMDumpModule(w0.llvm.module);
+    workspace_save(&w0, "a.llvm", "a.out");
     workspace_dispose_llvm(&w0);
 
     arena_free(&temporary_arena);

@@ -15,9 +15,11 @@ check_flag :: () -> int {
     flag := true;
     if flag return 60;
     return 420;
+}
 
-    m: int;
-    m = 69;
+_start :: () -> int {
+    fibonacci(5);
+    return 0;
 }
 
 N : u8 : 255;

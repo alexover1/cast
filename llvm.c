@@ -14,12 +14,54 @@ void workspace_setup_llvm(Workspace *w)
     LLVMInitializeAllAsmParsers();
     LLVMInitializeAllAsmPrinters();
 
+    // Initialize the LLVM target.
+
+    char *triple = LLVMGetDefaultTargetTriple();
+
+    char *error_message = NULL;
+    LLVMTargetRef target = NULL;
+
+    if (LLVMGetTargetFromTriple(triple, &target, &error_message) != 0) {
+        fprintf(stderr, "Error: Could not create LLVM target: %s\n", error_message);
+        LLVMDisposeMessage(error_message);
+        LLVMDisposeMessage(triple);
+        return;
+    }
+
+    printf("%s\n", LLVMGetTargetDescription(target));
+
+    LLVMTargetMachineRef target_machine = LLVMCreateTargetMachine(
+        target,                  // T
+        triple,                  // Triple
+        "",                      // Cpu
+        "",                      // Features
+        LLVMCodeGenLevelDefault, // Level
+        LLVMRelocPIC,            // Reloc
+        LLVMCodeModelDefault     // CodeModel
+    );
+    if (target_machine == NULL) {
+        fprintf(stderr, "Error: Could not create LLVM target machine\n");
+        LLVMDisposeMessage(triple);
+        return;
+    }
+
+    w->llvm.target_machine = target_machine;
+
+    // Create the LLVM context.
+    
     w->llvm.context = LLVMContextCreate();
     LLVMContextSetOpaquePointers(w->llvm.context, 1);
     // LLVMContextSetDiscardValueNames(w->llvm.context, 1);
 
+    // Create the LLVM module.
+
     w->llvm.module = LLVMModuleCreateWithNameInContext(w->name, w->llvm.context);
     w->llvm.builder = LLVMCreateBuilderInContext(w->llvm.context);
+
+    LLVMSetTarget(w->llvm.module, triple);
+    LLVMSetModuleDataLayout(w->llvm.module, LLVMCreateTargetDataLayout(target_machine));
+
+    LLVMDisposeMessage(triple);
 }
 
 void workspace_dispose_llvm(Workspace *w)
@@ -48,7 +90,7 @@ LLVMTypeRef llvm_get_type(Workspace *w, const Ast_Type_Definition *defn)
         if (defn == w->type_def_void) return LLVMVoidTypeInContext(llvm.context);
         
         switch (defn->literal_kind) {
-        case LITERAL_BOOL: return LLVMInt8TypeInContext(llvm.context);
+        case LITERAL_BOOL: return LLVMInt1TypeInContext(llvm.context);
         case LITERAL_STRING: {
             LLVMTypeRef elems[] = {
                 LLVMPointerType(LLVMInt8TypeInContext(llvm.context), 0), // *u8
@@ -252,7 +294,7 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
         const Ast_Literal *lit = xx expr;           
         LLVMTypeRef type = llvm_get_type(w, expr->inferred_type);
         switch (lit->kind) {
-        case LITERAL_BOOL:   return LLVMConstInt(type, lit->bool_value, 0);
+        case LITERAL_BOOL:   return LLVMConstInt(LLVMInt1TypeInContext(llvm.context), lit->bool_value, 0);
         case LITERAL_STRING: return llvm_const_string(llvm, lit->string_value.data, lit->string_value.count);
         case LITERAL_NULL:   return LLVMConstNull(type);
         }
@@ -265,6 +307,10 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
 
         // Because during typechecking we assured that the variable's initialization came before us, this is safe.
         assert(ident->resolved_declaration->llvm_value);
+
+        if (ident->resolved_declaration->flags & DECLARATION_IS_LAMBDA_ARGUMENT) {
+            return ident->resolved_declaration->llvm_value;
+        }
             
         return LLVMBuildLoad2(
             llvm.builder,
@@ -366,7 +412,9 @@ void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *st
         // Emit the "then" statement.
         LLVMPositionBuilderAtEnd(llvm.builder, basic_block_then);
         llvm_build_statement(w, function, if_stmt->then_statement);
-        LLVMBuildBr(llvm.builder, basic_block_merge);
+        if (LLVMGetBasicBlockTerminator(basic_block_then) == NULL) {
+            LLVMBuildBr(llvm.builder, basic_block_merge);
+        }
 
         // Emit the "else" statement.
         if (if_stmt->else_statement) {
@@ -444,13 +492,10 @@ void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *st
 
 void llvm_build_declaration(Workspace *w, Ast_Declaration *decl)
 {
-#if 0
-    String_Builder sb = {0};
-    sb_append_cstr(&sb, "@@@ ");
-    print_decl_to_builder(&sb, decl, 0);
-    sb_append_cstr(&sb, "\n");
-    printf(SV_Fmt, SV_Arg(sb));
-#endif
+    if (decl->flags & DECLARATION_IS_PROCEDURE_HEADER) {
+        Ast_Lambda *lambda = xx decl->root_expression;
+        LLVMSetValueName2(lambda->my_body_declaration->llvm_value, decl->ident->name.data, decl->ident->name.count);
+    }
 
     if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) {
         assert(decl->llvm_value); // Should've been added in the pre-pass.
@@ -459,7 +504,19 @@ void llvm_build_declaration(Workspace *w, Ast_Declaration *decl)
         LLVMPositionBuilderAtEnd(w->llvm.builder, entry);
         llvm_build_statement(w, function, xx decl->my_block->parent); // Arguments.
         llvm_build_statement(w, function, xx decl->my_block);
-    }
 
-    UNUSED(w);
+        if (decl->my_type->lambda_return_type == w->type_def_void) {
+            if (LLVMGetBasicBlockTerminator(entry) == NULL) {
+                LLVMBuildRetVoid(w->llvm.builder);
+            }
+        }
+
+        if (LLVMVerifyFunction(function, LLVMPrintMessageAction)) {
+            String_View name;
+            name.data = LLVMGetValueName2(function, &name.count);
+            printf("===============================\n");
+            LLVMDumpValue(function);
+            printf("===============================\n");
+        }
+    }
 }

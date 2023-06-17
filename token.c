@@ -3,10 +3,6 @@
 #include <stdarg.h>
 
 #ifndef _WIN32
-#    ifdef __linux__
-#        define _DEFAULT_SOURCE
-#        define _POSIX_C_SOURCE 200112L
-#    endif
 #    include <sys/types.h>
 #    include <sys/stat.h>
 #    include <unistd.h>
