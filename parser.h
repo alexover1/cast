@@ -319,7 +319,7 @@ typedef struct {
 
 enum {
     DECLARATION_IS_CONSTANT = 0x1,
-    // DECLARATION_IS_PROCEDURE_HEADER = 0x2,
+    DECLARATION_IS_PROCEDURE_HEADER = 0x2,
     DECLARATION_IS_PROCEDURE_BODY = 0x4,
     DECLARATION_IS_STRUCT_MEMBER = 0x8,
     DECLARATION_IS_ENUM_VALUE = 0x10,
@@ -340,6 +340,7 @@ struct Ast_Node {
 struct Ast_Declaration {
     String_View file_name;
     Source_Location location;
+    size_t serial;
 
     Ast_Ident *ident;
     Ast_Type_Definition *my_type;
@@ -383,7 +384,7 @@ typedef struct {
     Ast_Block *current_block;
     Ast_Lambda *current_lambda;
     Ast_Statement *current_loop; // Points at either Ast_While or Ast_For.
-    Ast_Declaration *current_declaration;
+    size_t serial;
 } Parser;
 
 void *ast_alloc(Parser *p, Source_Location loc, unsigned short type, size_t size);

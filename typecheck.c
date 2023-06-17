@@ -533,9 +533,29 @@ void typecheck_lambda(Workspace *w, Ast_Lambda *lambda)
 
 void typecheck_procedure_call(Workspace *w, Ast_Procedure_Call *call)
 {
-    UNUSED(w);
-    UNUSED(call);
-    UNIMPLEMENTED;
+    if (!call->procedure_expression->inferred_type->lambda_return_type) {
+        report_error(w, call->procedure_expression->location, "Type mismatch: Wanted a procedure but got %s.",
+            type_to_string(call->procedure_expression->inferred_type));
+    }
+
+    Ast_Type_Definition *proc = call->procedure_expression->inferred_type;
+
+    size_t n = arrlenu(call->arguments);
+    size_t m = arrlenu(proc->lambda_argument_types);
+    
+    if (n > m) report_error(w, call->_expression.location, "Too many arguments for procedure call (wanted %zu but got %zu).", m, n);
+    if (m > n) report_error(w, call->_expression.location, "Not enough arguments for procedure call (wanted %zu but got %zu).", m, n);
+
+    for (size_t i = 0; i < n; ++i) {
+        // TODO: Handle number constants.
+        if (!types_are_equal(call->arguments[i]->inferred_type, proc->lambda_argument_types[i])) {
+            report_error(w, call->arguments[i]->location, "Argument type mismatch: Wanted %s but got %s.",
+                type_to_string(proc->lambda_argument_types[i]), type_to_string(call->arguments[i]->inferred_type));
+        }
+    }
+
+    // @Incomplete: This doesn't work for multiple return values.
+    call->_expression.inferred_type = proc->lambda_return_type;
 }
 
 inline void typecheck_definition(Workspace *w, Ast_Type_Definition *defn)

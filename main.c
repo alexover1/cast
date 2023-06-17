@@ -27,6 +27,14 @@ int main(int argc, char **argv)
     Workspace w0;
     workspace_init(&w0, "My Program");
     workspace_add_file(&w0, input_path);
+#if 0
+    String_Builder sb = {0};
+    For (w0.declarations) {
+        print_decl_to_builder(&sb, w0.declarations[it], 0);
+        sb_append_cstr(&sb, "\n");
+    }
+    printf(SV_Fmt, SV_Arg(sb));
+#endif
     workspace_typecheck(&w0);
 
     workspace_setup_llvm(&w0);

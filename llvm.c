@@ -290,15 +290,22 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
         return LLVMBuildBinOp(llvm.builder, opcode, LHS, RHS, "");
     }
     case AST_LAMBDA: {
-            UNIMPLEMENTED;
-        // const Ast_Lambda *lambda = xx expr;
-        // LLVMTypeRef type = llvm_get_type(w, lambda->type_definition); assert(type);
-        // LLVMValueRef function = LLVMAddFunction(llvm.module, lambda->name.data, type);
-        // llvm_build_statement(w, function, xx lambda->block);
-        // return function;
+        const Ast_Lambda *lambda = xx expr;
+        LLVMValueRef procedure = lambda->my_body_declaration->llvm_value;
+        assert(procedure); // These get created in a pre-pass.
+        return procedure;
     }
-    case AST_PROCEDURE_CALL:
-        UNIMPLEMENTED;
+    case AST_PROCEDURE_CALL: {
+        const Ast_Procedure_Call *call = xx expr;
+        LLVMValueRef procedure = llvm_build_expression(w, call->procedure_expression);
+        LLVMTypeRef procedure_type = llvm_get_type(w, call->procedure_expression->inferred_type);
+        size_t args_count = arrlenu(call->arguments);
+        LLVMValueRef *args = arena_alloc(&temporary_arena, sizeof(LLVMValueRef) * args_count);
+        For (call->arguments) {
+            args[it] = llvm_build_expression(w, call->arguments[it]);
+        }
+        return LLVMBuildCall2(llvm.builder, procedure_type, procedure, args, args_count, "");
+    }
     case AST_TYPE_DEFINITION:
         report_error(w, expr->location, "Types cannot be used as values in our LLVM implementation yet.");
     case AST_CAST: {
@@ -423,6 +430,11 @@ void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *st
 
         UNIMPLEMENTED;
     }
+    case AST_EXPRESSION_STATEMENT: {
+        Ast_Expression_Statement *x = xx stmt;
+        llvm_build_expression(w, x->subexpression);
+        break;
+    }
     default:
         printf("%s\n", stmt_to_string(stmt));
         assert(0);
@@ -441,13 +453,12 @@ void llvm_build_declaration(Workspace *w, Ast_Declaration *decl)
 #endif
 
     if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) {
-        LLVMTypeRef type = llvm_get_type(w, decl->my_type); assert(type);
-        LLVMValueRef function = LLVMAddFunction(w->llvm.module, "", type);
+        assert(decl->llvm_value); // Should've been added in the pre-pass.
+        LLVMValueRef function = decl->llvm_value;
         LLVMBasicBlockRef entry = LLVMAppendBasicBlock(function, "entry");
         LLVMPositionBuilderAtEnd(w->llvm.builder, entry);
         llvm_build_statement(w, function, xx decl->my_block->parent); // Arguments.
         llvm_build_statement(w, function, xx decl->my_block);
-        decl->llvm_value = function;
     }
 
     UNUSED(w);

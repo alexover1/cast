@@ -126,6 +126,22 @@ void workspace_typecheck(Workspace *w)
 
         flatten_decl_for_typechecking(decl);
         arrput(queue, decl);
+#if 1
+        String_Builder sb = {0};
+        print_decl_to_builder(&sb, decl, 0);
+        sb_append_cstr(&sb, "\n");
+        For (decl->flattened) {
+            Ast_Node node = decl->flattened[it];
+            sb_append_cstr(&sb, ">>> ");
+            if (node.expression) {
+                sb_print(&sb, "[%d] ", node.expression->kind);
+                print_expr_to_builder(&sb, node.expression, 0);
+            }
+            if (node.statement)  print_stmt_to_builder(&sb, node.statement, 0);
+            sb_append_cstr(&sb, "\n");
+        }
+        printf(SV_Fmt, SV_Arg(sb));
+#endif
     }
     
     while (arrlenu(queue)) {
@@ -143,6 +159,17 @@ void workspace_typecheck(Workspace *w)
 
 void workspace_llvm(Workspace *w)
 {
+    // Add all function declarations in a pre-pass.
+    For (w->declarations) {
+        Ast_Declaration *decl = w->declarations[it];
+        if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) {
+            LLVMTypeRef type = llvm_get_type(w, decl->my_type); assert(type);
+            LLVMValueRef function = LLVMAddFunction(w->llvm.module, "", type);
+            decl->llvm_value = function;
+        }
+    }
+    
+    // Now build the LLVM IR.
     For (w->declarations) {
         Ast_Declaration *decl = w->declarations[it];
 

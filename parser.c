@@ -31,6 +31,8 @@ static inline Ast_Declaration *make_declaration(Parser *p, Source_Location loc)
 {
     Ast_Declaration *decl = arena_alloc(p->arena, sizeof(*decl));
     decl->location = loc;
+    decl->serial = p->serial;
+    p->serial += 1;
     arrput(p->workspace->declarations, decl);
     return decl;
 }
@@ -204,12 +206,38 @@ Ast_Expression *parse_primary_expression(Parser *p, Ast_Expression *base)
     if (base == NULL) base = parse_base_expression(p);
 
     while (1) {
+        if (p->reported_error) return base;
+        
         Token token = peek_next_token(p);
         switch (token.type) {
         case '.': // TODO: selector
         case '[': // TODO: array subscript
-        case '(': // TODO: procedure call
             UNIMPLEMENTED;
+        case '(': {
+            eat_next_token(p);
+            Ast_Procedure_Call *call = ast_alloc(p, token.location, AST_PROCEDURE_CALL, sizeof(*call));
+            call->procedure_expression = base;
+
+            if (peek_next_token(p).type == ')') {
+                eat_next_token(p);
+                base = xx call;
+                break;
+            }
+
+            Ast_Expression *arg = parse_expression(p);
+            arrput(call->arguments, arg);
+
+            while (peek_next_token(p).type == ',') {
+                eat_next_token(p);
+                arg = parse_expression(p);
+                if (p->reported_error) return xx call;
+                arrput(call->arguments, arg);
+            }
+            eat_token_type(p, ')', "Expected closing parenthesis after procedure call argument list.");
+            
+            base = xx call;
+            break;
+        }
         default:
             return base;
         }
@@ -304,6 +332,7 @@ Ast_Expression *parse_base_expression(Parser *p)
         UNIMPLEMENTED;
     }
 
+    assert(0);
     parser_report_error(p, token.location, "Expected a base expression (operand) but got %s.", token_type_to_string(token.type));
     return NULL;
 }
@@ -827,6 +856,11 @@ Ast_Statement *parse_statement(Parser *p)
         case TOKEN_DIVEQUALS:
         case TOKEN_MODEQUALS:
             return parse_assignment(p, expr);
+        default: {
+            Ast_Expression_Statement *stmt = ast_alloc(p, expr->location, AST_EXPRESSION_STATEMENT, sizeof(*stmt));
+            stmt->subexpression = expr;
+            return xx stmt;
+        }
         }
     }
 
@@ -843,6 +877,10 @@ void parse_declaration_value(Parser *p, Ast_Declaration *decl)
     if (token.type == ':') {
         decl->flags |= DECLARATION_IS_CONSTANT;
         decl->root_expression = parse_expression(p);
+
+        if (decl->root_expression->kind == AST_LAMBDA) {
+            decl->flags |= DECLARATION_IS_PROCEDURE_HEADER;
+        }
 
         // If we have a block, we need to set it on the declaration.
         if (decl->root_expression->kind == AST_TYPE_DEFINITION) {
@@ -880,6 +918,7 @@ Ast_Declaration *parse_declaration(Parser *p)
 
     Ast_Declaration *decl = make_declaration(p, token.location);
     decl->ident = make_identifier(p, token);
+    decl->ident->resolved_declaration = decl; // TODO: Does this work for overloads.
 
     // Flag us depending on the type of block we are in.
     if (p->current_block->belongs_to == BLOCK_BELONGS_TO_ENUM) {
@@ -1159,11 +1198,11 @@ void print_expr_to_builder(String_Builder *sb, const Ast_Expression *expr, size_
         break;
     }
     case AST_LAMBDA: {
-        const Ast_Lambda *lambda = xx expr;
-        print_type_to_builder(sb, lambda->type_definition);
-        sb_append_cstr(sb, " ");
-        print_stmt_to_builder(sb, xx lambda->my_body_declaration->my_block, depth);
-        // print_stmt_to_builder(sb, xx lambda->block, 0);
+        // const Ast_Lambda *lambda = xx expr;
+        sb_append_cstr(sb, "<lambda>");
+        // print_type_to_builder(sb, lambda->type_definition);
+        // sb_append_cstr(sb, " ");
+        // print_stmt_to_builder(sb, xx lambda->my_body_declaration->my_block, depth);
         break;
     }
     case AST_PROCEDURE_CALL: {
@@ -1305,12 +1344,21 @@ void print_stmt_to_builder(String_Builder *sb, const Ast_Statement *stmt, size_t
 
 void print_decl_to_builder(String_Builder *sb, const Ast_Declaration *decl, size_t depth)
 {
+    if (decl->flags & DECLARATION_IS_PROCEDURE_HEADER) {
+        Ast_Lambda *lambda = xx decl->root_expression; // TODO: handle overload_set
+        if (decl->ident) sb_append(sb, decl->ident->name.data, decl->ident->name.count);
+        else sb_append_cstr(sb, "<unnamed>");
+        sb_append_cstr(sb, " : ");
+        print_type_to_builder(sb, lambda->type_definition);
+        return;
+    }
+    
     if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) {
         sb_append_cstr(sb, "<lambda body> ");
         print_stmt_to_builder(sb, xx decl->my_block, depth);
         return;
     }
-    
+
     if (decl->ident) sb_append(sb, decl->ident->name.data, decl->ident->name.count);
     else sb_append_cstr(sb, "<unnamed>");
 
