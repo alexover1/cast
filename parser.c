@@ -7,6 +7,8 @@
 #include "parser.h"
 #include "workspace.h"
 
+// printf("%s:%d: >>> %p.\n", __FILE__, __LINE__, (void*)the_block);
+
 #define Enter_Block(parser, the_block) do {        \
     (the_block)->parent = (parser)->current_block; \
     (parser)->current_block = (the_block);         \
@@ -40,7 +42,7 @@ static inline Ast_Declaration *make_declaration(Parser *p, Source_Location loc)
 static inline Ast_Type_Definition *make_type_definition(Parser *p, Source_Location loc)
 {
     Ast_Type_Definition *defn = ast_alloc(p, loc, AST_TYPE_DEFINITION, sizeof(*defn));
-    defn->_expression.inferred_type = p->workspace->type_def_type;
+    // defn->_expression.inferred_type = p->workspace->type_def_type;
     return defn;
 }
 
@@ -136,6 +138,7 @@ static bool statement_requires_semicolon(Ast_Statement *stmt)
     case AST_LOOP_CONTROL:
     case AST_RETURN:
     case AST_USING:
+    case AST_IMPORT:
         return true;
     case AST_EXPRESSION_STATEMENT: {
         Ast_Expression_Statement *expr = xx stmt;
@@ -146,7 +149,7 @@ static bool statement_requires_semicolon(Ast_Statement *stmt)
     }
 }
 
-inline void *ast_alloc(Parser *p, Source_Location loc, unsigned short type, size_t size)
+inline void *ast_alloc(Parser *p, Source_Location loc, unsigned int type, size_t size)
 {
     Ast_Expression *ast = arena_alloc(p->arena, size);
     memset(ast, 0, size); // TODO: We could only memset the part AFTER Ast_Expression, but what about Ast_Statement...?
@@ -210,7 +213,49 @@ Ast_Expression *parse_primary_expression(Parser *p, Ast_Expression *base)
         
         Token token = peek_next_token(p);
         switch (token.type) {
-        case '.': // TODO: selector
+        case '.': {
+            eat_next_token(p);
+
+            token = eat_next_token(p);
+
+            switch (token.type) {
+            case '*': {
+                Ast_Selector *selector = ast_alloc(p, token.location, AST_SELECTOR, sizeof(*selector));
+                selector->namespace_expression = base;
+                selector->is_pointer_dereference = true;
+                base = xx selector;
+                break;
+            }
+            case '{': {
+                Ast_Type_Instantiation *inst = ast_alloc(p, token.location, AST_TYPE_INSTANTIATION, sizeof(*inst));
+                inst->type_definition = parse_type_definition(p, base);
+                if (p->reported_error) return base;
+                Ast_Expression *arg = parse_expression(p);
+                arrput(inst->arguments, arg);
+                while (peek_next_token(p).type == ',') {
+                    if (p->reported_error) return xx inst;
+                    eat_next_token(p); // eat comma
+                    arg = parse_expression(p);
+                    arrput(inst->arguments, arg);
+                }
+                eat_token_type(p, '}', "Missing closing curly brace around type instantiation arguments list.");
+                base = xx inst;
+                break;
+            }
+            case TOKEN_IDENT: {
+                Ast_Selector *selector = ast_alloc(p, token.location, AST_SELECTOR, sizeof(*selector));
+                selector->namespace_expression = base;
+                selector->ident = make_identifier(p, token);
+                base = xx selector;
+                break;
+            }
+            default:
+                parser_report_error(p, token.location, "Expected identifier after '.'.");
+                break;
+            }
+            
+            break;
+        }
         case '[': // TODO: array subscript
             UNIMPLEMENTED;
         case '(': {
@@ -316,7 +361,8 @@ Ast_Expression *parse_base_expression(Parser *p)
         case TOKEN_KEYWORD_USING:
         {
             Ast_Type_Definition *lambda_type = parse_lambda_type(p);
-            if (peek_next_token(p).type == '{') return xx parse_lambda_definition(p, lambda_type);
+            token = peek_next_token(p);
+            if (token.type == '{' || token.type == '#') return xx parse_lambda_definition(p, lambda_type);
             return xx lambda_type;
         }
         }
@@ -332,7 +378,6 @@ Ast_Expression *parse_base_expression(Parser *p)
         UNIMPLEMENTED;
     }
 
-    assert(0);
     parser_report_error(p, token.location, "Expected a base expression (operand) but got %s.", token_type_to_string(token.type));
     return NULL;
 }
@@ -340,7 +385,28 @@ Ast_Expression *parse_base_expression(Parser *p)
 Ast_Lambda *parse_lambda_definition(Parser *p, Ast_Type_Definition *lambda_type)
 {
     if (!lambda_type) lambda_type = parse_lambda_type(p);
-    
+
+    if (peek_next_token(p).type == '#') {
+        eat_next_token(p);
+        if (isalpha(peek_character(p))) {
+            Token token = eat_token_type(p, TOKEN_IDENT, "Expected an identifier because we parsed an alphabetic character after '#'.");
+
+            if (sv_eq(token.string_value, sv_from_cstr("foreign"))) {
+                // TODO: parse an identifier with which library the declaration is from.
+                Ast_Lambda *lambda = ast_alloc(p, lambda_type->_expression.location, AST_LAMBDA, sizeof(*lambda));
+                lambda->type_definition = lambda_type;
+                lambda->my_body_declaration = make_declaration(p, token.location);
+                lambda->my_body_declaration->flags = DECLARATION_IS_CONSTANT | DECLARATION_IS_PROCEDURE_BODY | DECLARATION_IS_FOREIGN;
+                lambda->my_body_declaration->my_type = lambda_type;
+                lambda->is_foreign = true;
+                Exit_Block(p, lambda_type->lambda_arguments_block);
+                return xx lambda;
+            }
+
+            parser_report_error(p, token.location, "Unknown directive '"SV_Fmt"'.", SV_Arg(token.string_value));
+        }
+    }
+
     Token token = eat_token_type(p, '{', "Expected opening curly brace after lambda type.");
 
     Ast_Lambda *lambda = ast_alloc(p, token.location, AST_LAMBDA, sizeof(*lambda));
@@ -558,25 +624,39 @@ Ast_Type_Definition *parse_type_definition(Parser *parser, Ast_Expression *type_
             return (Ast_Type_Definition *)type_expression;
 
         case AST_IDENT: {
+            Ast_Ident *ident = xx type_expression;
+
+            Ast_Type_Definition *literal_type_defn = parse_literal_type(parser, ident->name);
+            if (literal_type_defn) return literal_type_defn;
+
             Ast_Type_Definition *defn = make_type_definition(parser, type_expression->location);
-            defn->type_name = (Ast_Ident *)type_expression;
+            defn->type_name = ident;
             return defn;
         }
             
         case AST_UNARY_OPERATOR: {
-            Ast_Type_Definition *defn = make_type_definition(parser, type_expression->location);
-            // Unroll unary '*'.
-            while (type_expression->kind == AST_UNARY_OPERATOR) {
-                Ast_Unary_Operator *unary = xx type_expression;
-                if (unary->operator_type != '*') {
-                    parser_report_error(parser, type_expression->location, "Here we expected a type, but we got unary operator '%c'.", unary->operator_type);
-                }
-                defn->pointer_level += 1;
-                type_expression = unary->subexpression;
+            Ast_Unary_Operator *unary = xx type_expression;
+            if (unary->operator_type != '*') {
+                parser_report_error(parser, type_expression->location, "Here we expected a type, but we got unary operator '%c'.", unary->operator_type);
             }
-            defn->pointer_to = parse_type_definition(parser, type_expression);
+                
+            Ast_Type_Definition *defn = make_type_definition(parser, type_expression->location);
+
+            // Unroll unary '*'.
+            // while (type_expression->kind == AST_UNARY_OPERATOR) {
+            //     Ast_Unary_Operator *unary = xx type_expression;
+            //     if (unary->operator_type != '*') {
+            //         parser_report_error(parser, type_expression->location, "Here we expected a type, but we got unary operator '%c'.", unary->operator_type);
+            //     }
+            //     defn->pointer_level += 1;
+            //     type_expression = unary->subexpression;
+            // }
+            defn->pointer_to = parse_type_definition(parser, unary->subexpression);
             return defn;
         }
+
+        case AST_SELECTOR:
+            UNIMPLEMENTED;
 
         case AST_NUMBER:
             parser_report_error(parser, type_expression->location, "Here we expected a type, but we got a number.");
@@ -588,6 +668,8 @@ Ast_Type_Definition *parse_type_definition(Parser *parser, Ast_Expression *type_
             parser_report_error(parser, type_expression->location, "Here we expected a type, but we got a cast.");
         case AST_LAMBDA:
             parser_report_error(parser, type_expression->location, "Here we expected a type, but we got a lambda.");
+        case AST_TYPE_INSTANTIATION:
+            parser_report_error(parser, type_expression->location, "Here we expected a type, but we got an initializer argument list.");
 
         case AST_PROCEDURE_CALL: {
             Ast_Type_Definition *defn = make_type_definition(parser, type_expression->location);
@@ -602,11 +684,6 @@ Ast_Type_Definition *parse_type_definition(Parser *parser, Ast_Expression *type_
     case '*': {
         eat_next_token(parser);
         Ast_Type_Definition *defn = make_type_definition(parser, token.location);
-        defn->pointer_level = 1;
-        for (token = peek_next_token(parser); token.type == '*'; defn->pointer_level++) {
-            eat_next_token(parser);
-            token = peek_next_token(parser);
-        }
         defn->pointer_to = parse_type_definition(parser, NULL);
         return defn;
     }
@@ -818,6 +895,28 @@ Ast_Statement *parse_statement(Parser *p)
         return xx using;
     }
 
+    case '#': {
+        eat_next_token(p);
+
+        if (isalpha(peek_character(p))) {
+            token = eat_token_type(p, TOKEN_IDENT, "Expected an identifier because we parsed an alphabetic character after '#'.");
+            if (sv_eq(token.string_value, sv_from_cstr("import_system_library"))) {
+                Source_Location loc = token.location;
+
+                token = eat_token_type(p, TOKEN_STRING, "Expected a string constant with the library path after #import_system_library.");
+
+                Ast_Import *import = ast_alloc(p, loc, AST_IMPORT, sizeof(*import)); 
+                import->path_name = token.string_value;
+                import->is_system_library = true;
+                return xx import;
+            }
+        }
+
+        parser_report_error(p, token.location, "Expected a statement but got '#'.");
+        parser_report_error(p, token.location, "... if this is meant to be a directive then an identifier must be directly after the hash.");
+        return NULL;
+    }
+
     case '{':
         return xx parse_block(p);
 
@@ -897,12 +996,14 @@ void parse_declaration_value(Parser *p, Ast_Declaration *decl)
         // We parse the expression and create a type instantiation in the current block.
         Ast_Expression *initializer = parse_expression(p);
         
-        // Ast_Type_Instantiation *inst = ast_alloc(p, initializer->location, AST_TYPE_INSTANTIATION, sizeof(*inst));
-        // inst->type_definition = decl->my_type;
-        // inst->initializer_expression = initializer;
-        // inst->name = decl->ident->name.data;
+        if (p->current_block->belongs_to == BLOCK_BELONGS_TO_STRUCT) {
+            // This means we are a struct field.
+            decl->flags |= DECLARATION_IS_STRUCT_FIELD;
+            Ast_Struct *struct_desc = p->current_block->belongs_to_data;
+            decl->struct_field_index = struct_desc->field_count;
+            struct_desc->field_count += 1;
+        }
 
-        // decl->instantiation = inst;
         decl->root_expression = initializer;
         return;
     }
@@ -920,13 +1021,14 @@ Ast_Declaration *parse_declaration(Parser *p)
     decl->ident = make_identifier(p, token);
     decl->ident->resolved_declaration = decl; // TODO: Does this work for overloads.
 
+    // Default to not being a struct field, this gets set in parse_declaration_value.
+    decl->struct_field_index = -1;
+
     // Flag us depending on the type of block we are in.
     if (p->current_block->belongs_to == BLOCK_BELONGS_TO_ENUM) {
         decl->flags |= DECLARATION_IS_ENUM_VALUE;
-    } else if (p->current_block->belongs_to == BLOCK_BELONGS_TO_STRUCT) {
-        decl->flags |= DECLARATION_IS_STRUCT_MEMBER;
-    }
-    
+    }    
+
     // Add the declaration to the block.
     checked_add_to_scope(p, p->current_block, decl);
 
@@ -946,6 +1048,14 @@ Ast_Declaration *parse_declaration(Parser *p)
 
     token = peek_next_token(p);
     if (token.type == ',' || token.type == ';') {
+        if (p->current_block->belongs_to == BLOCK_BELONGS_TO_STRUCT) {
+            // This means we are a struct field.
+            decl->flags |= DECLARATION_IS_STRUCT_FIELD;
+            Ast_Struct *struct_desc = p->current_block->belongs_to_data;
+            decl->struct_field_index = struct_desc->field_count;
+            struct_desc->field_count += 1;
+        }
+
         // This means decl->root_expression will be null, which is fine because we will set it to the default value later.
         return decl;
     }
@@ -993,14 +1103,6 @@ Ast_Block *parse_toplevel(Parser *p)
 #define WHT   "\x1B[37m"
 #define RESET "\x1B[0m"
 #define TAB   "    "
-
-void sv_print_bytes(String_View s)
-{
-    for (size_t i = 0; i < s.count; ++i) {
-        printf("%2x ", s.data[i]);
-    }
-    printf("\n");
-}
 
 void parser_report_error(Parser *parser, Source_Location loc, const char *format, ...)
 {
@@ -1101,15 +1203,24 @@ void checked_add_to_scope(Parser *p, Ast_Block *block, Ast_Declaration *decl)
     arrput(block->declarations, decl);
 }
 
-Ast_Declaration *find_declaration_if_exists(const Ast_Ident *ident)
+Ast_Declaration *find_declaration_in_block(const Ast_Block *block, String_View name)
+{
+    For (block->declarations) {
+        if (!block->declarations[it]->ident) continue;
+
+        if (sv_eq(block->declarations[it]->ident->name, name)) {
+            return block->declarations[it];
+        }
+    }
+    return NULL;
+}
+
+Ast_Declaration *find_declaration_from_identifier(const Ast_Ident *ident)
 {
     Ast_Block *block = ident->enclosing_block;
     while (block) {
-        For (block->declarations) {
-            if (sv_eq(block->declarations[it]->ident->name, ident->name)) {
-                return block->declarations[it];
-            }
-        }
+        Ast_Declaration *decl = find_declaration_in_block(block, ident->name);
+        if (decl) return decl;
         block = block->parent;
     }
     return NULL;
@@ -1166,7 +1277,9 @@ void print_expr_to_builder(String_Builder *sb, const Ast_Expression *expr, size_
             break;
         }
         if (literal->kind == LITERAL_STRING) {
+            sb_append_cstr(sb, "\"");
             sb_append(sb, literal->string_value.data, literal->string_value.count);
+            sb_append_cstr(sb, "\"");
             break;
         }
         if (literal->kind == LITERAL_NULL) {
@@ -1226,6 +1339,27 @@ void print_expr_to_builder(String_Builder *sb, const Ast_Expression *expr, size_
         print_expr_to_builder(sb, cast->subexpression, depth);
         break;
     }
+    case AST_SELECTOR: {
+        const Ast_Selector *selector = xx expr;
+        print_expr_to_builder(sb, selector->namespace_expression, depth);
+        sb_append_cstr(sb, ".");
+        if (selector->is_pointer_dereference) sb_append_cstr(sb, "*");
+        else  print_expr_to_builder(sb, xx selector->ident, depth);
+        break;
+    }
+    case AST_TYPE_INSTANTIATION: {
+        const Ast_Type_Instantiation *inst = xx expr;
+        print_type_to_builder(sb, inst->type_definition);
+        sb_append_cstr(sb, "{\n");
+        depth += 1;
+        For (inst->arguments) {
+            for (size_t i = 0; i < depth; ++i) sb_append_cstr(sb, "    ");
+            print_expr_to_builder(sb, inst->arguments[it], depth);
+            sb_append_cstr(sb, ",\n");
+        }
+        sb_append_cstr(sb, "}");
+        break;
+    }
     }
 }
 
@@ -1241,12 +1375,12 @@ void print_type_to_builder(String_Builder *sb, const Ast_Type_Definition *defn)
     } else if (defn->enum_defn) {
         assert(0);
     } else if (defn->type_name) {
-        assert(0);
+        sb_append_cstr(sb, "`"); // nocheckin: this is so we can see that it's an identifier.
+        sb_append(sb, defn->type_name->name.data, defn->type_name->name.count);
     } else if (defn->struct_call) {
         assert(0);
     } else if (defn->pointer_to) {
-        sb_reserve(sb, defn->pointer_level);
-        for (size_t i = 0; i < defn->pointer_level; ++i) sb_append(sb, "*", 1);
+        sb_append(sb, "*", 1);
         print_type_to_builder(sb, defn->pointer_to);
     } else if (defn->array_element_type) {
         if (defn->array_length < 0) {
@@ -1320,6 +1454,13 @@ void print_stmt_to_builder(String_Builder *sb, const Ast_Statement *stmt, size_t
         const Ast_Using *using = xx stmt;
         sb_append_cstr(sb, "using ");
         print_expr_to_builder(sb, using->subexpression, depth);
+        break;
+    }
+    case AST_IMPORT: {
+        const Ast_Import *import = xx stmt;
+        if (import->is_system_library) sb_append_cstr(sb, "#import_system_library ");
+        else                           sb_append_cstr(sb, "#import ");
+        sb_append(sb, import->path_name.data, import->path_name.count);
         break;
     }
     case AST_EXPRESSION_STATEMENT: {

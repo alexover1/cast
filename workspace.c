@@ -225,6 +225,7 @@ void workspace_init(Workspace *w, const char *name)
 
     w->type_def_string = make_type_leaf(w, "string", 16);
     w->type_def_string->literal_kind = LITERAL_STRING;
+    w->type_def_string->flags |= TYPE_IS_NAMESPACE;
 
     w->type_def_void = make_type_leaf(w, "void", 0);
 }

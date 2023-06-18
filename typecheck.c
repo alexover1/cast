@@ -8,6 +8,10 @@
     while (ast->replacement) ast = ast->replacement; \
 } while(0)
 
+#define Replace_Type(type) do { \
+    while (type->_expression.replacement) type = xx type->_expression.replacement; \
+} while(0)
+
 void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
 {
 #if 0
@@ -29,7 +33,12 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
             } else {
                 // Hit a roadblock.
                 Source_Location loc = node->expression->location;
-                printf("$$$ "Loc_Fmt": %s\n", SV_Arg(w->files[loc.fid].path), Loc_Arg(loc), expr_to_string(node->expression));
+                String_View name = decl->ident ? decl->ident->name : sv_from_cstr("<unnamed>");
+                printf(Loc_Fmt": WAITING: Declaration '"SV_Fmt"' is waiting on: %s\n",
+                    SV_Arg(w->files[loc.fid].path),
+                    Loc_Arg(loc),
+                    SV_Arg(name),
+                    expr_to_string(node->expression));
                 return;
             }
         }
@@ -81,6 +90,7 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
     }
 
     // So we know we have a type now.
+    Replace_Type(decl->my_type);
 
     if (decl->my_type == w->type_def_void) {
         report_error(w, decl->location, "Cannot have a declaration with void type.");
@@ -114,16 +124,15 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
 
     Replace(decl->root_expression);
 
-    if (decl->root_expression->kind == AST_LITERAL) {
-        // TODO: String to char.
-        // typecheck_literal(w, xx decl->root_expression, decl->my_type);
-        // Replace(decl->root_expression);
-    } else if (decl->root_expression->kind == AST_NUMBER) {
+    // TODO: String to char.
+    // Check if my_type is a numeric type and root_expression is a literal.
+
+    if (decl->root_expression->kind == AST_NUMBER) {
         typecheck_number(w, xx decl->root_expression, decl->my_type);
     } else {
         // Check that we're not doing something like `x: bool = 12345`.
         if (!types_are_equal(decl->my_type, decl->root_expression->inferred_type)) {
-            report_error(w, decl->location, "Type mismatch: Wanted %s but got %s.",
+            report_error(w, decl->root_expression->location, "Type mismatch: Wanted %s but got %s.",
                 type_to_string(decl->my_type), type_to_string(decl->root_expression->inferred_type));
         }
     }
@@ -237,9 +246,9 @@ done:
 void typecheck_literal(Workspace *w, Ast_Literal *literal)
 {
     switch (literal->kind) {
-    case LITERAL_BOOL:   literal->_expression.inferred_type = w->type_def_bool;
-    case LITERAL_STRING: literal->_expression.inferred_type = w->type_def_string;
-    case LITERAL_NULL:   literal->_expression.inferred_type = w->type_def_void; // TODO
+    case LITERAL_BOOL:   literal->_expression.inferred_type = w->type_def_bool;   break;
+    case LITERAL_STRING: literal->_expression.inferred_type = w->type_def_string; break;
+    case LITERAL_NULL:   literal->_expression.inferred_type = w->type_def_void;   break;
     }
 
     // if (literal->default_type == w->type_def_string) {
@@ -264,9 +273,9 @@ void typecheck_literal(Workspace *w, Ast_Literal *literal)
 
 void typecheck_identifier(Workspace *w, Ast_Ident *ident)
 {
+    // TODO: We should have a separate phase where we check for circular dependencies and unresolved identifiers.
     if (!ident->resolved_declaration) {
-        // TODO: We should have a separate phase where we check for circular dependencies and unresolved identifiers.
-        ident->resolved_declaration = find_declaration_if_exists(ident);
+        ident->resolved_declaration = find_declaration_from_identifier(ident);
         if (!ident->resolved_declaration) {
             report_error(w, ident->_expression.location, "Undeclared identifier '"SV_Fmt"'.", SV_Arg(ident->name));
         }
@@ -560,6 +569,28 @@ void typecheck_procedure_call(Workspace *w, Ast_Procedure_Call *call)
 
 inline void typecheck_definition(Workspace *w, Ast_Type_Definition *defn)
 {
+    if (defn->struct_desc) {
+        if (!defn->struct_desc->block->_statement.typechecked) return;
+        For (defn->struct_desc->block->declarations) {
+            Ast_Declaration *member = defn->struct_desc->block->declarations[it];
+            if (member->flags & DECLARATION_IS_STRUCT_FIELD) {
+                assert(member->my_type);
+                arrput(defn->struct_desc->field_types, member->my_type);
+            }
+        }
+    }
+
+    if (defn->type_name) {
+        Ast_Declaration *decl = defn->type_name->resolved_declaration;
+
+        if (decl->my_type != w->type_def_type) {
+            report_error(w, defn->_expression.location, "Type mismatch: Wanted Type but got %s.",
+                type_to_string(decl->my_type));
+        }
+
+        defn->_expression.replacement = xx decl->root_expression;
+    }
+
     defn->_expression.inferred_type = w->type_def_type;
 }
 
@@ -567,6 +598,142 @@ void typecheck_cast(Workspace *w, Ast_Cast *cast)
 {
     UNUSED(w);
     cast->_expression.inferred_type = cast->type;
+}
+
+void typecheck_selector(Workspace *w, Ast_Selector *selector)
+{
+    Replace(selector->namespace_expression);
+
+    Ast_Type_Definition *defn = selector->namespace_expression->inferred_type;
+    Replace_Type(defn);
+
+    // Our syntax for pointer dereference is currently `pointer.*` so we use a selector.
+    if (selector->is_pointer_dereference) {
+        if (!defn->pointer_to) {
+            report_error(w, selector->_expression.location, "Attempt to dereference a non-pointer (got type %s).",
+                type_to_string(defn));
+        }
+        selector->_expression.inferred_type = defn->pointer_to;
+        return;
+    }
+
+    // Otherwise we actually need to do a member lookup.
+
+    if (selector->resolved_declaration) {
+        // Since we may be waiting for this declaration, we will try to be typechecked multiple times.
+        // We cache the resolved_declaration for that reason.
+
+        Ast_Declaration *decl = selector->resolved_declaration;
+
+        if (!(decl->flags & DECLARATION_HAS_BEEN_TYPECHECKED)) return;
+
+        // Otherwise, we're done.
+        selector->_expression.inferred_type = decl->my_type;
+        if (decl->flags & DECLARATION_IS_CONSTANT) {
+            selector->_expression.replacement = decl->root_expression;
+        }
+        if (decl->flags & DECLARATION_IS_STRUCT_FIELD) {
+            selector->struct_field_index = decl->struct_field_index;
+        }
+        return;
+    }
+    
+    if (defn->flags & TYPE_IS_NAMESPACE) {
+        if (defn == w->type_def_string) {
+            if (sv_eq(selector->ident->name, sv_from_cstr("data"))) {
+                selector->struct_field_index = 0;
+
+                Ast_Type_Definition *u8_ptr_defn = context_alloc(sizeof(Ast_Type_Definition));
+                u8_ptr_defn->_expression.kind = AST_TYPE_DEFINITION;
+                u8_ptr_defn->_expression.inferred_type = w->type_def_type;
+                u8_ptr_defn->pointer_to = w->type_def_u8;
+
+                selector->_expression.inferred_type = u8_ptr_defn;
+                return;
+            }
+            if (sv_eq(selector->ident->name, sv_from_cstr("count"))) {
+                selector->struct_field_index = 1;
+                selector->_expression.inferred_type = w->type_def_int;
+                return;
+            }
+            report_error(w, selector->_expression.location, "String type has no member '"SV_Fmt"'.", SV_Arg(selector->ident->name));
+        }
+
+        if (defn->struct_desc) {
+            Ast_Declaration *decl = find_declaration_in_block(defn->struct_desc->block, selector->ident->name);
+            if (!decl) {
+                report_error(w, selector->_expression.location, "Struct has no member '"SV_Fmt"'.", SV_Arg(selector->ident->name));
+            }
+
+            // Cache this in case we can't proceed and need to return here later.
+            selector->resolved_declaration = decl;
+
+            if (!(decl->flags & DECLARATION_HAS_BEEN_TYPECHECKED)) return;
+
+            // @Copypasta
+            selector->_expression.inferred_type = decl->my_type;
+            if (decl->flags & DECLARATION_IS_CONSTANT) {
+                selector->_expression.replacement = decl->root_expression;
+            }
+            if (decl->flags & DECLARATION_IS_STRUCT_FIELD) {
+                selector->struct_field_index = decl->struct_field_index;
+            }
+            return;
+        }
+
+        assert(0);
+    }
+
+    report_error(w, selector->namespace_expression->location, "Attempt to dereference a non-namespaced type (got type %s).",
+        type_to_string(defn));
+}
+
+void typecheck_instantiation(Workspace *w, Ast_Type_Instantiation *inst)
+{
+    Ast_Type_Definition *defn = inst->type_definition;
+    Source_Location site = inst->_expression.location;
+
+    while (inst->type_definition->_expression.replacement) {
+        inst->type_definition = xx inst->type_definition->_expression.replacement;
+    }
+
+    if (defn->pointer_to) {
+        report_error(w, site, "Cannot instantiate a pointer type using initializer argument list.");
+    }
+
+    if (defn->array_element_type) {
+        report_error(w, site, "Cannot instantiate an array type using initializer argument list (this is not implemented yet).");
+    }
+
+    if (defn->struct_desc) {
+        int n = arrlen(inst->arguments);
+        int m = defn->struct_desc->field_count;
+        if (n != m) {
+            report_error(w, site, "Incorrect number of arguments to instantiate struct type (wanted %d but got %d).", m, n);
+        }
+        for (int i = 0; i < n; ++i) {
+            Ast_Type_Definition *expected = defn->struct_desc->field_types[i];
+            Ast_Type_Definition *actual = inst->arguments[i]->inferred_type;
+            if (!types_are_equal(actual, expected)) {
+                report_error(w, inst->arguments[i]->location, "Field type mismatch: Wanted %s but got %s.",
+                    type_to_string(expected), type_to_string(actual));
+            }
+        }
+    }
+
+    if (defn->flags & TYPE_IS_LITERAL) {
+        if (arrlen(inst->arguments) > 1) {
+            report_error(w, site, "Can only instantiate literal types with 1 argument.");
+        }
+
+        if (inst->arguments[0]->kind == AST_NUMBER) {
+            typecheck_number(w, xx inst->arguments[0], defn);
+        }
+
+        inst->_expression.replacement = inst->arguments[0];
+    }
+
+    inst->_expression.inferred_type = defn;
 }
 
 void typecheck_expression(Workspace *w, Ast_Expression *expr)
@@ -582,6 +749,8 @@ void typecheck_expression(Workspace *w, Ast_Expression *expr)
     case AST_PROCEDURE_CALL:     typecheck_procedure_call(w, xx expr);  break;
     case AST_TYPE_DEFINITION:    typecheck_definition(w, xx expr);      break;
     case AST_CAST:               typecheck_cast(w, xx expr);            break;
+    case AST_SELECTOR:           typecheck_selector(w, xx expr);        break;
+    case AST_TYPE_INSTANTIATION: typecheck_instantiation(w, xx expr);   break;
     }
 }
 
@@ -661,6 +830,7 @@ void typecheck_statement(Workspace *w, Ast_Statement *stmt)
     case AST_LOOP_CONTROL:         break;
     case AST_RETURN:               typecheck_return(w, xx stmt); break;
     case AST_USING:                typecheck_using(w, xx stmt); break;
+    case AST_IMPORT:               break;
     case AST_EXPRESSION_STATEMENT: break;
     case AST_VARIABLE:             typecheck_variable(w, xx stmt); break;
     case AST_ASSIGNMENT:           typecheck_assignment(w, xx stmt); break;
@@ -701,11 +871,29 @@ void flatten_expr_for_typechecking(Ast_Declaration *root, Ast_Expression *expr)
         For (call->arguments) flatten_expr_for_typechecking(root, call->arguments[it]);
         break;
     }
-    case AST_TYPE_DEFINITION:
+    case AST_TYPE_DEFINITION: {
+        Ast_Type_Definition *defn = xx expr;
+        if (defn->struct_desc) flatten_stmt_for_typechecking(root, xx defn->struct_desc->block);
+        if (defn->type_name)   flatten_expr_for_typechecking(root, xx defn->type_name);
         break;
+    }
     case AST_CAST: {
         Ast_Cast *cast = xx expr;
         flatten_expr_for_typechecking(root, cast->subexpression);
+        break;
+    }
+    case AST_SELECTOR: {
+        Ast_Selector *selector = xx expr;
+        flatten_expr_for_typechecking(root, selector->namespace_expression);
+        // flatten_expr_for_typechecking(root, xx selector->ident);
+        break;
+    }
+    case AST_TYPE_INSTANTIATION: {
+        Ast_Type_Instantiation *inst = xx expr;
+        flatten_expr_for_typechecking(root, xx inst->type_definition);
+        For (inst->arguments) {
+            flatten_expr_for_typechecking(root, inst->arguments[it]);
+        }
         break;
     }
     }
@@ -757,6 +945,8 @@ void flatten_stmt_for_typechecking(Ast_Declaration *root, Ast_Statement *stmt)
         flatten_expr_for_typechecking(root, using->subexpression);
         break;
     }
+    case AST_IMPORT:
+        break;
     case AST_EXPRESSION_STATEMENT: {
         Ast_Expression_Statement *expr = xx stmt;
         flatten_expr_for_typechecking(root, expr->subexpression);
@@ -786,9 +976,14 @@ void flatten_stmt_for_typechecking(Ast_Declaration *root, Ast_Statement *stmt)
 void flatten_decl_for_typechecking(Ast_Declaration *decl)
 {
     if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) {
+        if (decl->flags & DECLARATION_IS_FOREIGN) return; // Nothing to typecheck.
         flatten_stmt_for_typechecking(decl, xx decl->my_block->parent); // Arguments.
         flatten_stmt_for_typechecking(decl, xx decl->my_block);
         return;
+    }
+
+    if (decl->my_type) {
+        flatten_expr_for_typechecking(decl, xx decl->my_type);
     }
 
     if (decl->root_expression) {
@@ -798,7 +993,6 @@ void flatten_decl_for_typechecking(Ast_Declaration *decl)
 
 bool pointer_types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y)
 {
-    if (x->pointer_level != y->pointer_level) return false;
     return types_are_equal(x->pointer_to, y->pointer_to);
 }
 

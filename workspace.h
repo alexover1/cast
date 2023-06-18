@@ -64,8 +64,9 @@ void workspace_dispose_llvm(Workspace *w);
 LLVMValueRef llvm_get_named_value(LLVMValueRef function, const char *name);
 LLVMTypeRef llvm_get_type(Workspace *w, const Ast_Type_Definition *type_def);
 LLVMOpcode llvm_get_opcode(int operator_type, Ast_Type_Definition *defn, LLVMIntPredicate *int_predicate, LLVMRealPredicate *real_predicate);
-
 LLVMValueRef llvm_const_string(Llvm llvm, const char *data, size_t count);
+
+LLVMValueRef llvm_build_lvalue(Workspace *w, Ast_Expression *expr);
 LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr);
 void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *stmt);
 void llvm_build_declaration(Workspace *w, Ast_Declaration *decl);

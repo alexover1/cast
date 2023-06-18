@@ -53,6 +53,8 @@ typedef enum {
     AST_PROCEDURE_CALL = 7,
     AST_TYPE_DEFINITION = 8,
     AST_CAST = 9,
+    AST_SELECTOR = 10,
+    AST_TYPE_INSTANTIATION = 11,
 } Ast_Expression_Kind;
 
 struct Ast_Expression {
@@ -73,7 +75,7 @@ typedef enum {
     AST_LOOP_CONTROL = 5,
     AST_RETURN = 6,
     AST_USING = 7,
-    // 8 is unused
+    AST_IMPORT = 8,
     AST_EXPRESSION_STATEMENT = 9, // When an expression is used as a statement...
     AST_VARIABLE = 10,
     AST_ASSIGNMENT = 11,
@@ -145,7 +147,6 @@ typedef struct {
 
     String_View name;
     Ast_Block *enclosing_block;
-    String_View source_file_name;
 
     Ast_Declaration *resolved_declaration; // @Volatile: Set during typechecking.
 } Ast_Ident;
@@ -171,6 +172,7 @@ struct Ast_Lambda {
 
     Ast_Type_Definition *type_definition;
     Ast_Declaration *my_body_declaration;
+    bool is_foreign;
 
     // String_View name;
     // Ast_Block *block; // block->parent == arguments_block
@@ -185,6 +187,8 @@ typedef struct {
 
 struct Ast_Struct {
     Ast_Block *block;
+    int field_count;
+    Ast_Type_Definition **field_types; // @Volatile: Set after this struct has been typechecked.
 };
 
 struct Ast_Enum {
@@ -209,7 +213,7 @@ struct Ast_Type_Definition {
     Ast_Procedure_Call *struct_call;
 
     // If a pointer
-    size_t pointer_level;
+    // size_t pointer_level;
     Ast_Type_Definition *pointer_to;
 
     // If a built-in literal type.
@@ -240,6 +244,24 @@ typedef struct {
     Ast_Type_Definition *type;
     Ast_Expression *subexpression;
 } Ast_Cast;
+
+typedef struct {
+    Ast_Expression _expression;
+
+    Ast_Expression *namespace_expression;
+    Ast_Ident *ident; // The identifier we are looking up.
+    bool is_pointer_dereference; // If so, member_name will be NULL.
+
+    Ast_Declaration *resolved_declaration;
+    int struct_field_index;
+} Ast_Selector;
+
+typedef struct {
+    Ast_Expression _expression;
+
+    Ast_Type_Definition *type_definition;
+    Ast_Expression **arguments;
+} Ast_Type_Instantiation;
 
 // BEGIN STATEMENTS
 
@@ -317,11 +339,18 @@ typedef struct {
     int operator_type; // If also applying an operator. ('=' if not).
 } Ast_Assignment;
 
+typedef struct {
+    Ast_Statement _statement;
+
+    String_View path_name;
+    bool is_system_library;
+} Ast_Import;
+
 enum {
     DECLARATION_IS_CONSTANT = 0x1,
     DECLARATION_IS_PROCEDURE_HEADER = 0x2,
     DECLARATION_IS_PROCEDURE_BODY = 0x4,
-    DECLARATION_IS_STRUCT_MEMBER = 0x8,
+    DECLARATION_IS_STRUCT_FIELD = 0x8,
     DECLARATION_IS_ENUM_VALUE = 0x10,
     DECLARATION_IS_LAMBDA_ARGUMENT = 0x20,
     DECLARATION_IS_POLYMORPHIC = 0x40,
@@ -329,6 +358,7 @@ enum {
     DECLARATION_TYPE_WAS_INFERRED_FROM_EXPRESSION = 0x80,
     DECLARATION_VALUE_WAS_INFERRED_FROM_TYPE = 0x100, // Default value (zero) was added.
     DECLARATION_HAS_BEEN_TYPECHECKED = 0x200,
+    DECLARATION_IS_FOREIGN = 0x400,
 };
 
 // This is so we can store a flattened list of nodes for typechecking.
@@ -345,6 +375,8 @@ struct Ast_Declaration {
     Ast_Ident *ident;
     Ast_Type_Definition *my_type;
     Ast_Expression *root_expression;
+
+    int struct_field_index; // If a struct member.
 
     Ast_Block *my_block; // If this declaration owns a block.
 
@@ -387,7 +419,7 @@ typedef struct {
     size_t serial;
 } Parser;
 
-void *ast_alloc(Parser *p, Source_Location loc, unsigned short type, size_t size);
+void *ast_alloc(Parser *p, Source_Location loc, unsigned int type, size_t size);
 
 // Debugging:
 
@@ -406,6 +438,9 @@ Token parser_fill_peek_buffer(Parser *parser);
 Token peek_token(Parser *parser, size_t user_index);
 Token peek_next_token(Parser *parser);
 Token eat_next_token(Parser *parser);
+Source_Location parser_current_location(Parser *parser);
+
+int peek_character(Parser *parser);
 
 void parser_report_error(Parser *parser, Source_Location loc, const char *format, ...);
 
@@ -436,7 +471,8 @@ Ast_Statement *parse_if_statement(Parser *p);
 Ast_Statement *parse_assignment(Parser *p, Ast_Expression *pointer_expression);
 Ast_Statement *parse_statement(Parser *p);
 
-Ast_Declaration *find_declaration_if_exists(const Ast_Ident *ident);
+Ast_Declaration *find_declaration_in_block(const Ast_Block *block, String_View name);
+Ast_Declaration *find_declaration_from_identifier(const Ast_Ident *ident);
 void checked_add_to_scope(Parser *p, Ast_Block *block, Ast_Declaration *decl);
 
 // File and path-related functions:

@@ -10,8 +10,6 @@ Arena temporary_arena = {0};
 Arena general_arena = {0};
 Arena *context_arena = &general_arena;
 
-Ast_Ident make_identifier(const char *name, Ast_Block *enclosing_block);
-
 int main(int argc, char **argv)
 {   
     const char *program = shift_args(&argc, &argv);
@@ -69,5 +67,4 @@ char *shift_args(int *argc, char ***argv)
 
 
 // TODO:  `sin : (theta: float) -> float; `
-// TODO: If you try and call yourself the program segfaults.
 // TODO: Function pointers act very weird.

@@ -20,12 +20,11 @@
 // All of these are @Internal.
 Token find_next_token(Parser *parser);
 void parser_next_line(Parser *parser);
-Source_Location parser_current_location(Parser *parser);
 void parser_add_line_to_source_file(Parser *parser);
 
 #define parser_current_character_index(parser) ((parser)->current_line.data - (parser)->current_line_start)
 
-static inline int peek_character(Parser *parser)
+inline int peek_character(Parser *parser)
 {
     if (parser->current_line.count) return (int) *parser->current_line.data;
     return -1;
@@ -186,18 +185,41 @@ Token find_next_token(Parser *parser)
 
     switch (token.type) {
     case '"': {
-        size_t n = 0;
-        while (n < parser->current_line.count) {
-            if (parser->current_line.data[n] == '"') {
-                // Copy because the input string will be freed before the Ast_Literal is freed. 
-                token.string_value = arena_sv_copy(parser->arena, sv_chop_left(&parser->current_line, n));
+        String_Builder sb = {0};
+
+        while (peek_character(parser) != -1) {
+            c = eat_character(parser);
+
+            if (c == '"') {
                 token.type = TOKEN_STRING;
+                token.string_value.data = sb.data;
+                token.string_value.count = sb.count;
                 token.location.c1 = parser_current_character_index(parser);
-                eat_character(parser);
                 return token;
             }
-            n += 1;
+
+            if (c == '\\') {
+                c = eat_character(parser);
+                switch (c) {
+                case -1:
+                    parser_report_error(parser, parser_current_location(parser),
+                        "While parsing a string literal, we encountered a backslash with no following character.");
+                case '0':  sb_append(&sb, "\0", 1); break;
+                case 'n':  sb_append(&sb, "\n", 1); break;
+                case 't':  sb_append(&sb, "\t", 1); break;
+                case '"':  sb_append(&sb, "\"", 1); break;
+                case '\'': sb_append(&sb, "'", 1);  break;
+                default:
+                    parser_report_error(parser, parser_current_location(parser),
+                        "Illegal escape sequence '%c'.", (char)c);
+                }
+                continue;
+            }
+
+            char str = (char)c;
+            sb_append(&sb, &str, 1);
         }
+            
         token.location.c1 = parser_current_character_index(parser);
         parser_report_error(parser, token.location, "While parsing a string literal, we encountered the end of the input.");
     }
@@ -264,6 +286,7 @@ Token find_next_token(Parser *parser)
             token.type = TOKEN_DOUBLE_DOT;
         }
         break;
+    // Single-character tokens.
     case '(':
     case ')':
     case '[':
@@ -274,6 +297,7 @@ Token find_next_token(Parser *parser)
     case ':':
     case ';':
     case '~':
+    case '#':
         break;
     default:
         token.type = TOKEN_ERROR;

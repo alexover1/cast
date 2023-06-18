@@ -73,6 +73,7 @@ SVDEF bool sv_starts_with(String_View sv, String_View prefix);
 SVDEF bool sv_ends_with(String_View sv, String_View suffix);
 SVDEF uint64_t sv_to_u64(String_View sv);
 uint64_t sv_chop_u64(String_View *sv);
+SVDEF void sv_print_bytes(String_View s);
 
 #endif  // SV_H_
 
@@ -321,6 +322,14 @@ SVDEF String_View sv_take_left_while(String_View sv, bool (*predicate)(char x))
         i += 1;
     }
     return sv_from_parts(sv.data, i);
+}
+
+SVDEF void sv_print_bytes(String_View s)
+{
+    for (size_t i = 0; i < s.count; ++i) {
+        printf("%2x ", s.data[i]);
+    }
+    printf("\n");
 }
 
 #endif // SV_IMPLEMENTATION

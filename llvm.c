@@ -4,7 +4,8 @@
 #include "common.h"
 #include "workspace.h"
 
-#define xx (void*)
+// For now, who cares if we zero terminate? I don't see any problems. And it lets you call c functions easier.
+#define DONT_ZERO_TERMINATE 0
 
 void workspace_setup_llvm(Workspace *w)
 {
@@ -123,7 +124,8 @@ LLVMTypeRef llvm_get_type(Workspace *w, const Ast_Type_Definition *defn)
     }
 
     else if (defn->type_name) {       
-        UNIMPLEMENTED;
+        assert(defn->type_name->resolved_declaration);
+        return llvm_get_type(w, xx defn->type_name->resolved_declaration->root_expression);
     }
 
     else if (defn->struct_call) {
@@ -136,11 +138,7 @@ LLVMTypeRef llvm_get_type(Workspace *w, const Ast_Type_Definition *defn)
             return LLVMPointerTypeInContext(llvm.context, 0); // opaque
         }
 
-        LLVMTypeRef res = llvm_get_type(w, defn->pointer_to);
-        for (size_t i = 0; i < defn->pointer_level; ++i) {
-            res = LLVMPointerType(res, 0);
-        }
-        return res;
+        return LLVMPointerType(llvm_get_type(w, defn->pointer_to), 0);
     }
 
     else if (defn->array_element_type) {
@@ -266,7 +264,7 @@ LLVMValueRef llvm_const_string(Llvm llvm, const char *data, size_t count)
     // Create global variable with the array of characters.
     LLVMValueRef global_string = LLVMAddGlobal(llvm.module, array_type, "");
     LLVMSetLinkage(global_string, LLVMPrivateLinkage);
-    LLVMSetInitializer(global_string, LLVMConstStringInContext(llvm.context, data, count, 1));
+    LLVMSetInitializer(global_string, LLVMConstStringInContext(llvm.context, data, count, DONT_ZERO_TERMINATE));
 
     // Create constant structure value.
     LLVMValueRef struct_fields[] = {
@@ -276,6 +274,39 @@ LLVMValueRef llvm_const_string(Llvm llvm, const char *data, size_t count)
             
     return LLVMConstStructInContext(llvm.context,
         struct_fields, sizeof(struct_fields)/sizeof(struct_fields[0]), 1);
+}
+
+LLVMValueRef llvm_build_lvalue(Workspace *w, Ast_Expression *expr)
+{
+    Llvm llvm = w->llvm;
+    while (expr->replacement) expr = expr->replacement;
+    switch (expr->kind) {
+    case AST_IDENT: {
+        const Ast_Ident *ident = xx expr;          
+        assert(ident->resolved_declaration);
+        assert(!(ident->resolved_declaration->flags & DECLARATION_IS_CONSTANT)); // It should have been substituted.
+        assert(ident->resolved_declaration->llvm_value); // Must have been initialized.
+        return ident->resolved_declaration->llvm_value;
+    }
+    case AST_SELECTOR: {
+        const Ast_Selector *selector = xx expr;
+        LLVMTypeRef type = llvm_get_type(w, selector->namespace_expression->inferred_type);
+        LLVMValueRef pointer = llvm_build_lvalue(w, selector->namespace_expression);
+        if (selector->is_pointer_dereference) {
+            return LLVMBuildLoad2(llvm.builder, type, pointer, "");
+        }
+        assert(selector->struct_field_index >= 0);
+        return LLVMBuildStructGEP2(
+            llvm.builder,
+            llvm_get_type(w, selector->_expression.inferred_type),
+            pointer,
+            selector->struct_field_index,
+            "");
+    }
+    default:
+        fprintf(stderr, "Internal Error: '%s' is not an lvalue.\n", expr_to_string(expr));
+        exit(1);
+    }
 }
 
 LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
@@ -358,6 +389,59 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
         const Ast_Cast *cast = xx expr;
         LLVMTypeRef dest_type = llvm_get_type(w, cast->type);
         return LLVMBuildBitCast(llvm.builder, llvm_build_expression(w, cast->subexpression), dest_type, "");
+    }
+    case AST_SELECTOR: {
+        const Ast_Selector *selector = xx expr;
+            
+        if (selector->struct_field_index >= 0) {
+            LLVMTypeRef field_type = llvm_get_type(w, selector->_expression.inferred_type);
+            LLVMTypeRef struct_type = llvm_get_type(w, selector->namespace_expression->inferred_type);
+#if 1
+
+            LLVMValueRef struct_pointer = llvm_build_lvalue(w, selector->namespace_expression);
+            LLVMValueRef field_pointer = LLVMBuildStructGEP2(
+                llvm.builder,
+                struct_type,
+                struct_pointer,
+                selector->struct_field_index,
+                "");
+
+            return LLVMBuildLoad2(llvm.builder, field_type, field_pointer, "");
+#else
+            LLVMValueRef field_pointer = llvm_build_lvalue(w, selector);
+            return LLVMBuildLoad2(llvm.builder, field_type, field_pointer, "");
+#endif
+        }
+
+        assert(0);
+    }
+    case AST_TYPE_INSTANTIATION: {
+        const Ast_Type_Instantiation *inst = xx expr;
+
+        assert(!(inst->type_definition->flags & TYPE_IS_LITERAL)); // Typechecking should replace this.
+
+        size_t n = arrlenu(inst->arguments);
+
+        LLVMValueRef *values = arena_alloc(&temporary_arena, n * sizeof(LLVMValueRef));
+        For (inst->arguments) {
+            values[it] = llvm_build_expression(w, inst->arguments[it]);
+        }
+        return LLVMConstStructInContext(llvm.context, values, n, 1);
+
+        // LLVMTypeRef struct_type = llvm_get_type(w, inst->type_definition);
+        // LLVMValueRef struct_pointer = lvalue;
+
+        // For (inst->arguments) {
+        //     LLVMValueRef field_pointer = LLVMBuildStructGEP2(
+        //         llvm.builder,
+        //         struct_type,
+        //         struct_pointer,
+        //         it,
+        //         "");
+        //     LLVMValueRef field_value = llvm_build_rvalue(w, field_pointer, inst->arguments[it]);
+        //     if (field_value) LLVMBuildStore(llvm.builder, field_value, field_pointer);
+        // }
+        // return NULL;
     }
     }
 }
@@ -442,7 +526,7 @@ void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *st
             LLVMSetValueName2(var->declaration->llvm_value, name, var->declaration->ident->name.count);
             break;
         }
-        
+
         LLVMTypeRef type = llvm_get_type(w, var->declaration->my_type); assert(type);
         LLVMValueRef alloca = LLVMBuildAlloca(llvm.builder, type, name);
         LLVMValueRef initializer = llvm_build_expression(w, var->declaration->root_expression);
@@ -498,6 +582,8 @@ void llvm_build_declaration(Workspace *w, Ast_Declaration *decl)
     }
 
     if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) {
+        if (decl->flags & DECLARATION_IS_FOREIGN) return; // Nothing to build.
+
         assert(decl->llvm_value); // Should've been added in the pre-pass.
         LLVMValueRef function = decl->llvm_value;
         LLVMBasicBlockRef entry = LLVMAppendBasicBlock(function, "entry");
@@ -517,6 +603,7 @@ void llvm_build_declaration(Workspace *w, Ast_Declaration *decl)
             printf("===============================\n");
             LLVMDumpValue(function);
             printf("===============================\n");
+            exit(1);
         }
     }
 }
