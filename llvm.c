@@ -349,8 +349,15 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
             ident->resolved_declaration->llvm_value,
             "");
     }
-    case AST_UNARY_OPERATOR:
+    case AST_UNARY_OPERATOR: {
+        const Ast_Unary_Operator *unary = xx expr;
+
+        if (unary->operator_type == '*') {
+            return llvm_build_lvalue(w, unary->subexpression);
+        }       
+
         UNIMPLEMENTED;
+    }
     case AST_BINARY_OPERATOR: {
         const Ast_Binary_Operator *binary = xx expr;
         LLVMValueRef LHS = llvm_build_expression(w, binary->left);
@@ -527,7 +534,12 @@ void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *st
             break;
         }
 
-        LLVMTypeRef type = llvm_get_type(w, var->declaration->my_type); assert(type);
+        LLVMTypeRef type = llvm_get_type(w, var->declaration->my_type);
+
+        if (var->declaration->my_type->lambda_return_type) {
+            type = LLVMPointerType(type, 0);
+        }
+
         LLVMValueRef alloca = LLVMBuildAlloca(llvm.builder, type, name);
         LLVMValueRef initializer = llvm_build_expression(w, var->declaration->root_expression);
         LLVMBuildStore(llvm.builder, initializer, alloca);
@@ -592,7 +604,7 @@ void llvm_build_declaration(Workspace *w, Ast_Declaration *decl)
         llvm_build_statement(w, function, xx decl->my_block);
 
         if (decl->my_type->lambda_return_type == w->type_def_void) {
-            if (LLVMGetBasicBlockTerminator(entry) == NULL) {
+            if (LLVMGetBasicBlockTerminator(LLVMGetLastBasicBlock(function)) == NULL) {
                 LLVMBuildRetVoid(w->llvm.builder);
             }
         }

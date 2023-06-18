@@ -12,6 +12,20 @@
     while (type->_expression.replacement) type = xx type->_expression.replacement; \
 } while(0)
 
+// Be sure to call Replace() on this first to replace constant identifiers.
+static bool expression_is_lvalue(Ast_Expression *expr)
+{
+    if (expr->kind == AST_IDENT) {
+        Ast_Ident *ident = xx expr;
+        return !(ident->resolved_declaration->flags & DECLARATION_IS_CONSTANT);
+    }
+    if (expr->kind == AST_SELECTOR) {
+        Ast_Selector *selector = xx expr;
+        return expression_is_lvalue(selector->namespace_expression);
+    }
+    return false;
+}
+
 void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
 {
 #if 0
@@ -99,29 +113,14 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
     if (!decl->root_expression) {
         // We're definitely not a constant (this error is checked above).
         // So we just set the default value for the type.
-        if (!(decl->my_type->flags & TYPE_IS_LEAF)) {
-            report_error(w, decl->location, "Support for default values for non-leaf types is not implemented yet (this is an internal error).");
-        }
-
-        if (decl->my_type->struct_desc) UNIMPLEMENTED;
-        if (decl->my_type->enum_defn) UNIMPLEMENTED;
-        if (decl->my_type->lambda_return_type) UNIMPLEMENTED; // TODO: What does this even mean? I think we should put null here.
-
-        // Otherwise, we're a literal.
-        assert(decl->my_type->flags & TYPE_IS_LITERAL);
-
-        if (decl->my_type->flags & TYPE_IS_NUMERIC) {
-            decl->root_expression = xx make_number(0);
-        } else {
-            decl->root_expression = xx make_literal(decl->my_type->literal_kind);
-        }
-
+        decl->root_expression = generate_default_value_for_type(w, decl->my_type);
         decl->root_expression->location = decl->location;
         decl->root_expression->inferred_type = decl->my_type;
         decl->flags |= DECLARATION_VALUE_WAS_INFERRED_FROM_TYPE;
-        goto done;
+        goto done;       
     }
 
+    // TODO: Because we constant replace the expression, the debug location information gets messed up.
     Replace(decl->root_expression);
 
     // TODO: String to char.
@@ -139,6 +138,37 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
 
 done:
     decl->flags |= DECLARATION_HAS_BEEN_TYPECHECKED;
+}
+
+Ast_Expression *generate_default_value_for_type(Workspace *w, Ast_Type_Definition *type)
+{
+    if (type->pointer_to) {
+        return xx make_literal(LITERAL_NULL);
+    }
+
+    if (type->lambda_return_type) {
+        return xx make_literal(LITERAL_NULL);
+    }
+    
+    if (type->struct_desc) {
+        // The default value of a structure is one that has been initialized properly.
+        Ast_Type_Instantiation *inst = context_alloc(sizeof(*inst));
+        inst->type_definition = type;
+        return xx inst;
+    }
+
+    if (type->flags & TYPE_IS_NUMERIC) {
+        return xx make_number(0);
+    }
+
+    if (type->flags & TYPE_IS_LITERAL) {
+        return xx make_literal(type->literal_kind);
+    }
+
+    UNIMPLEMENTED;
+
+    (void)w;
+    return NULL;
 }
 
 Ast_Expression *autocast_to_bool(Workspace *w, Ast_Expression *expr)
@@ -309,9 +339,25 @@ void typecheck_identifier(Workspace *w, Ast_Ident *ident)
 
 void typecheck_unary_operator(Workspace *w, Ast_Unary_Operator *unary)
 {
-    UNUSED(w);
-    UNUSED(unary);
+#define site (unary->_expression.location)
+
+    Replace(unary->subexpression);
+    
+    if (unary->operator_type == '*') {
+        if (!expression_is_lvalue(unary->subexpression)) {
+            report_error(w, site, "Can only take a pointer to an lvalue."); // TODO: This error mesage.
+        }
+        Ast_Type_Definition *defn = context_alloc(sizeof(*defn));
+        defn->pointer_to = unary->subexpression->inferred_type;
+        defn->_expression.inferred_type = w->type_def_type; // TODO: Is this really necessary?
+        defn->_expression.location = unary->subexpression->inferred_type->_expression.location;
+        unary->_expression.inferred_type = defn;
+        return;
+    }
+    
     UNIMPLEMENTED;
+
+#undef site
 }
 
 inline Ast_Literal *make_literal(Literal_Kind kind)
@@ -1005,6 +1051,15 @@ bool types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y)
     if (x->array_element_type && y->array_element_type) {
         if (x->array_length != y->array_length) return false;
         return types_are_equal(x->array_element_type, y->array_element_type);
+    }
+
+    if (x->lambda_return_type && y->lambda_return_type) {
+        if (!types_are_equal(x->lambda_return_type, y->lambda_return_type)) return false;
+        if (arrlenu(x->lambda_argument_types) != arrlenu(y->lambda_argument_types)) return false;
+        For (x->lambda_argument_types) {
+            if (!types_are_equal(x->lambda_argument_types[it], y->lambda_argument_types[it])) return false;
+        }
+        return true;
     }
 
     // All other types, such as structures and enumerations, can only be compared by pointer.

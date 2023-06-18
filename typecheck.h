@@ -84,6 +84,7 @@ void typecheck_variable(Workspace *w, Ast_Variable *var);
 void typecheck_assignment(Workspace *w, Ast_Assignment *assign);
 void typecheck_statement(Workspace *w, Ast_Statement *statement);
 
+Ast_Expression *generate_default_value_for_type(Workspace *w, Ast_Type_Definition *type);
 Ast_Expression *autocast_to_bool(Workspace *w, Ast_Expression *expr);
 Ast_Expression *fold_binary_arithmetic_or_comparison(Workspace *w, char operator_type, Ast_Number *left, Ast_Number *right);
 Ast_Type_Definition *typecheck_binary_arithmetic(Workspace *w, char operator_type, Source_Location site, Ast_Expression *left, Ast_Expression *right);
