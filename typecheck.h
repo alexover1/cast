@@ -88,13 +88,15 @@ Ast_Expression *generate_default_value_for_type(Workspace *w, Ast_Type_Definitio
 Ast_Expression *autocast_to_bool(Workspace *w, Ast_Expression *expr);
 Ast_Expression *fold_binary_arithmetic_or_comparison(Workspace *w, char operator_type, Ast_Number *left, Ast_Number *right);
 Ast_Type_Definition *typecheck_binary_arithmetic(Workspace *w, char operator_type, Source_Location site, Ast_Expression *left, Ast_Expression *right);
+void typecheck_selector_on_string(Workspace *w, Ast_Selector *selector);
+void typecheck_selector_on_array(Workspace *w, Ast_Selector *selector, Ast_Type_Definition *defn);
 
 void flatten_expr_for_typechecking(Ast_Declaration *root, Ast_Expression *expr);
 void flatten_stmt_for_typechecking(Ast_Declaration *root, Ast_Statement *stmt);
 void flatten_decl_for_typechecking(Ast_Declaration *decl);
 
+void check_that_types_match(Workspace *w, Ast_Expression *expr, Ast_Type_Definition *type);
 bool types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y);
-bool pointer_types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y);
 
 Ast_Literal *make_literal(Literal_Kind kind);
 Ast_Literal *make_boolean(Workspace *w, Source_Location loc, bool value);

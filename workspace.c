@@ -7,42 +7,47 @@
 
 void workspace_parse_entire_file(Workspace *w, Source_File file);
 
-static Ast_Type_Definition *make_type_leaf(Workspace *w, const char *literal_name, int size_in_bytes)
+static Ast_Type_Definition *make_type_definition(Workspace *w, const char *name, Ast_Type_Kind kind, int size_bytes)
 {
-    Ast_Type_Definition *defn = context_alloc(sizeof(*defn)); // context_alloc zero-inits.
+    Ast_Type_Definition *defn = context_alloc(sizeof(*defn));
     defn->_expression.kind = AST_TYPE_DEFINITION;
     defn->_expression.inferred_type = w->type_def_type;
-    defn->literal_name = literal_name;
-    defn->size = size_in_bytes;
-    defn->flags = TYPE_IS_LEAF | TYPE_IS_LITERAL | TYPE_HAS_STORAGE;
+    defn->name = name;
+    defn->kind = kind;
+    defn->size = size_bytes;
     return defn;
 }
 
-static Ast_Type_Definition *make_integer_type_leaf(Workspace *w, const char *literal_name, int size_in_bytes, bool is_signed, unsigned long low, unsigned long high)
+static Ast_Type_Definition *make_type_definition_literal(Workspace *w, Literal_Kind literal_kind, const char *literal_name, int size_bytes)
 {
-    Ast_Type_Definition *defn = make_type_leaf(w, literal_name, size_in_bytes);
-    defn->flags |= TYPE_IS_NUMERIC;
-    defn->number_literal_low = make_number(low);
-    defn->number_literal_high = make_number(high);
+    Ast_Type_Definition *defn = make_type_definition(w, literal_name, TYPE_DEF_LITERAL, size_bytes);
+    defn->literal = literal_kind;
+    return defn;
+}
+
+static Ast_Type_Definition *make_type_definition_integer(Workspace *w, const char *literal_name, int size_bytes, bool is_signed, unsigned long low, unsigned long high)
+{
+    Ast_Type_Definition *defn = make_type_definition(w, literal_name, TYPE_DEF_NUMBER, size_bytes);
+    defn->number.literal_low = make_number(low);
+    defn->number.literal_high = make_number(high);
     if (is_signed) {
-        defn->number_flags = NUMBER_FLAGS_SIGNED;
-        defn->number_literal_low->flags |= NUMBER_FLAGS_SIGNED;
-        defn->number_literal_high->flags |= NUMBER_FLAGS_SIGNED;
+        defn->number.flags = NUMBER_FLAGS_SIGNED;
+        defn->number.literal_low->flags |= NUMBER_FLAGS_SIGNED;
+        defn->number.literal_high->flags |= NUMBER_FLAGS_SIGNED;
     }
     return defn;
 }
 
-static Ast_Type_Definition *make_float_type_leaf(Workspace *w, const char *literal_name, int size_in_bytes, bool requires_float64, double low, double high)
+static Ast_Type_Definition *make_type_definition_float(Workspace *w, const char *literal_name, int size_bytes, bool requires_float64, double low, double high)
 {
-    Ast_Type_Definition *defn = make_type_leaf(w, literal_name, size_in_bytes);
-    defn->flags |= TYPE_IS_NUMERIC;
-    defn->number_flags = NUMBER_FLAGS_FLOAT;
-    defn->number_literal_low = make_number_float(low);
-    defn->number_literal_high = make_number_float(high);
+    Ast_Type_Definition *defn = make_type_definition(w, literal_name, TYPE_DEF_NUMBER, size_bytes);
+    defn->number.flags = NUMBER_FLAGS_FLOAT;
+    defn->number.literal_low = make_number_float(low);
+    defn->number.literal_high = make_number_float(high);
     if (requires_float64) {
-        defn->number_flags |= NUMBER_FLAGS_FLOAT64;
-        defn->number_literal_low->flags |= NUMBER_FLAGS_FLOAT64;
-        defn->number_literal_high->flags |= NUMBER_FLAGS_FLOAT64;
+        defn->number.flags |= NUMBER_FLAGS_FLOAT64;
+        defn->number.literal_low->flags |= NUMBER_FLAGS_FLOAT64;
+        defn->number.literal_high->flags |= NUMBER_FLAGS_FLOAT64;
     }
     return defn;
 }
@@ -203,31 +208,28 @@ void workspace_init(Workspace *w, const char *name)
     w->files = NULL;
 
     // Create type definitions for built-in types.
-    w->type_def_type = make_type_leaf(w, "Type", 8);
+    w->type_def_type = make_type_definition(w, "Type", TYPE_DEF_LITERAL, 8);
     w->type_def_type->_expression.inferred_type = w->type_def_type; // And on and on and on...
 
-    w->type_def_int = make_integer_type_leaf(w, "int", 8, true,  LLONG_MIN, LLONG_MAX);
-    w->type_def_u8  = make_integer_type_leaf(w, "u8",  1, false, 0,         UCHAR_MAX);
-    w->type_def_u16 = make_integer_type_leaf(w, "u16", 2, false, 0,         USHRT_MAX);
-    w->type_def_u32 = make_integer_type_leaf(w, "u32", 4, false, 0,         UINT_MAX);
-    w->type_def_u64 = make_integer_type_leaf(w, "u64", 8, false, 0,         ULLONG_MAX);
-    w->type_def_s8  = make_integer_type_leaf(w, "s8",  1, true,  SCHAR_MIN, SCHAR_MAX);
-    w->type_def_s16 = make_integer_type_leaf(w, "s16", 2, true,  SHRT_MIN,  SHRT_MAX);
-    w->type_def_s32 = make_integer_type_leaf(w, "s32", 4, true,  INT_MIN,   INT_MAX);
-    w->type_def_s64 = make_integer_type_leaf(w, "s64", 8, true,  LLONG_MIN, LLONG_MAX);
+    w->type_def_int = make_type_definition_integer(w, "int", 8, true,  LLONG_MIN, LLONG_MAX);
+    w->type_def_u8  = make_type_definition_integer(w, "u8",  1, false, 0,         UCHAR_MAX);
+    w->type_def_u16 = make_type_definition_integer(w, "u16", 2, false, 0,         USHRT_MAX);
+    w->type_def_u32 = make_type_definition_integer(w, "u32", 4, false, 0,         UINT_MAX);
+    w->type_def_u64 = make_type_definition_integer(w, "u64", 8, false, 0,         ULLONG_MAX);
+    w->type_def_s8  = make_type_definition_integer(w, "s8",  1, true,  SCHAR_MIN, SCHAR_MAX);
+    w->type_def_s16 = make_type_definition_integer(w, "s16", 2, true,  SHRT_MIN,  SHRT_MAX);
+    w->type_def_s32 = make_type_definition_integer(w, "s32", 4, true,  INT_MIN,   INT_MAX);
+    w->type_def_s64 = make_type_definition_integer(w, "s64", 8, true,  LLONG_MIN, LLONG_MAX);
 
-    w->type_def_float   = make_float_type_leaf(w, "float",   4, false, FLT_MIN, FLT_MAX);
-    w->type_def_float32 = make_float_type_leaf(w, "float32", 4, false, FLT_MIN, FLT_MAX);   
-    w->type_def_float64 = make_float_type_leaf(w, "float64", 8, true,  DBL_MIN, DBL_MAX);
+    w->type_def_float   = make_type_definition_float(w, "float",   4, false, FLT_MIN, FLT_MAX);
+    w->type_def_float32 = make_type_definition_float(w, "float32", 4, false, FLT_MIN, FLT_MAX);   
+    w->type_def_float64 = make_type_definition_float(w, "float64", 8, true,  DBL_MIN, DBL_MAX);
     
-    w->type_def_bool = make_type_leaf(w, "bool", 1);
-    w->type_def_bool->literal_kind = LITERAL_BOOL;
+    w->type_def_bool = make_type_definition_literal(w, LITERAL_BOOL, "bool", 1);
 
-    w->type_def_string = make_type_leaf(w, "string", 16);
-    w->type_def_string->literal_kind = LITERAL_STRING;
-    w->type_def_string->flags |= TYPE_IS_NAMESPACE;
+    w->type_def_string = make_type_definition_literal(w, LITERAL_STRING, "string", 16);
 
-    w->type_def_void = make_type_leaf(w, "void", 0);
+    w->type_def_void = make_type_definition(w, "void", TYPE_DEF_LITERAL, 0);
 }
 
 inline void workspace_parse_entire_file(Workspace *w, Source_File file)

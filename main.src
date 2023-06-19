@@ -1,11 +1,11 @@
 main :: () -> int {
     x := 5;
     y: *int = *x;
-    
+
     s := "Hello, World";
-    print_integer(s32.{69});
+    print_integer(69);
     puts(s.data);
-    exit(s32.{1});
+    exit(1);
     return 0;
 }
 

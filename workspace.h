@@ -19,6 +19,9 @@ typedef struct {
     LLVMModuleRef module;
     LLVMBuilderRef builder;
     LLVMTargetMachineRef target_machine;
+    LLVMTypeRef string_type;
+    LLVMTypeRef slice_type;
+    LLVMTypeRef dynamic_array_type;
 } Llvm;
 
 struct Workspace {

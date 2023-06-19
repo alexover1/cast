@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <string.h> // strerror
 #include <stdio.h> // os_read_entire_file
+#include <limits.h> // LLONG_MIN for defn->array.length
 
 #include "common.h"
 #include "parser.h"
@@ -39,9 +40,10 @@ static inline Ast_Declaration *make_declaration(Parser *p, Source_Location loc)
     return decl;
 }
 
-static inline Ast_Type_Definition *make_type_definition(Parser *p, Source_Location loc)
+static inline Ast_Type_Definition *make_type_definition(Parser *p, Source_Location loc, Ast_Type_Kind kind)
 {
     Ast_Type_Definition *defn = ast_alloc(p, loc, AST_TYPE_DEFINITION, sizeof(*defn));
+    defn->kind = kind;
     // defn->_expression.inferred_type = p->workspace->type_def_type;
     return defn;
 }
@@ -101,14 +103,20 @@ static bool expression_requires_semicolon(Ast_Expression *expr)
 {
     if (expr->kind == AST_TYPE_DEFINITION) {
         Ast_Type_Definition *defn = xx expr;
-        if (defn->struct_desc) return false;
-        if (defn->enum_defn) return false;
-        if (defn->type_name) return true;
-        if (defn->array_element_type) return true;
-        if (defn->pointer_to) return true;
-        if (defn->lambda_return_type) return true;
-        if (defn->literal_name) return true;
-        UNREACHABLE;
+        switch (defn->kind) {
+        case TYPE_DEF_STRUCT:
+        case TYPE_DEF_ENUM:
+            return false;
+        case TYPE_DEF_NUMBER:
+        case TYPE_DEF_IDENT:
+        case TYPE_DEF_POINTER:
+        case TYPE_DEF_ARRAY:
+        case TYPE_DEF_LAMBDA:
+        case TYPE_DEF_LITERAL:
+        case TYPE_DEF_STRUCT_CALL:
+        case TYPE_DEF_ANY:
+            return true;
+        }
     }
     if (expr->kind == AST_LAMBDA) return false;
     return true;
@@ -399,7 +407,7 @@ Ast_Lambda *parse_lambda_definition(Parser *p, Ast_Type_Definition *lambda_type)
                 lambda->my_body_declaration->flags = DECLARATION_IS_CONSTANT | DECLARATION_IS_PROCEDURE_BODY | DECLARATION_IS_FOREIGN;
                 lambda->my_body_declaration->my_type = lambda_type;
                 lambda->is_foreign = true;
-                Exit_Block(p, lambda_type->lambda_arguments_block);
+                Exit_Block(p, lambda_type->lambda.arguments_block);
                 return xx lambda;
             }
 
@@ -422,7 +430,7 @@ Ast_Lambda *parse_lambda_definition(Parser *p, Ast_Type_Definition *lambda_type)
 
     p->current_lambda = lambda;
     parse_into_block(p, lambda->my_body_declaration->my_block);
-    Exit_Block(p, lambda_type->lambda_arguments_block);
+    Exit_Block(p, lambda_type->lambda.arguments_block);
     p->current_lambda = previous_lambda;
 
     return lambda;
@@ -489,9 +497,8 @@ Ast_Type_Definition *parse_struct_desc(Parser *p)
 
     parse_into_block(p, struct_desc->block);
 
-    Ast_Type_Definition *defn = make_type_definition(p, token.location);
+    Ast_Type_Definition *defn = make_type_definition(p, token.location, TYPE_DEF_STRUCT);
     defn->struct_desc = struct_desc;
-    defn->flags = TYPE_IS_LEAF | TYPE_IS_NAMESPACE | TYPE_HAS_STORAGE;
     return defn;
 }
 
@@ -509,9 +516,8 @@ Ast_Type_Definition *parse_enum_defn(Parser *p)
 
     parse_into_block(p, enum_defn->block);
 
-    Ast_Type_Definition *defn = make_type_definition(p, token.location);
+    Ast_Type_Definition *defn = make_type_definition(p, token.location, TYPE_DEF_ENUM);
     defn->enum_defn = enum_defn;
-    defn->flags = TYPE_IS_LEAF | TYPE_IS_NAMESPACE;
     return defn;
 }
 
@@ -524,14 +530,13 @@ Ast_Type_Definition *parse_lambda_type(Parser *p)
 
     Source_Location location = token.location;
 
-    Ast_Type_Definition *type_definition = make_type_definition(p, location);
-    type_definition->flags = TYPE_IS_LEAF;
+    Ast_Type_Definition *type_definition = make_type_definition(p, location, TYPE_DEF_LAMBDA);
 
     // Open a scope for the arguments.
     
-    type_definition->lambda_arguments_block = ast_alloc(p, token.location, AST_BLOCK, sizeof(Ast_Block));
-    type_definition->lambda_arguments_block->belongs_to = BLOCK_IS_LAMBDA_ARGUMENTS;
-    Enter_Block(p, type_definition->lambda_arguments_block);
+    type_definition->lambda.arguments_block = ast_alloc(p, token.location, AST_BLOCK, sizeof(Ast_Block));
+    type_definition->lambda.arguments_block->belongs_to = BLOCK_IS_LAMBDA_ARGUMENTS;
+    Enter_Block(p, type_definition->lambda.arguments_block);
 
     // Check for closing paren, meaning an empty argument list.
 
@@ -540,9 +545,9 @@ Ast_Type_Definition *parse_lambda_type(Parser *p)
         token = peek_next_token(p); 
         if (token.type == TOKEN_RIGHT_ARROW) {
             eat_next_token(p);
-            type_definition->lambda_return_type = parse_type_definition(p, NULL);
+            type_definition->lambda.return_type = parse_type_definition(p, NULL);
         } else {
-            type_definition->lambda_return_type = p->workspace->type_def_void;
+            type_definition->lambda.return_type = p->workspace->type_def_void;
         }
         return type_definition;
     }
@@ -555,7 +560,7 @@ Ast_Type_Definition *parse_lambda_type(Parser *p)
         Ast_Declaration *parameter = parse_lambda_argument(p, count);
 
         assert(parameter->my_type); // TODO: We want to be able to put "name := value" in procedure type.
-        arrput(type_definition->lambda_argument_types, parameter->my_type);
+        arrput(type_definition->lambda.argument_types, parameter->my_type);
         count += 1;
 
         if (p->reported_error) return type_definition;
@@ -568,9 +573,9 @@ Ast_Type_Definition *parse_lambda_type(Parser *p)
             token = peek_next_token(p); 
             if (token.type == TOKEN_RIGHT_ARROW) {
                 eat_next_token(p);
-                type_definition->lambda_return_type = parse_type_definition(p, NULL);
+                type_definition->lambda.return_type = parse_type_definition(p, NULL);
             } else {
-                type_definition->lambda_return_type = p->workspace->type_def_void;
+                type_definition->lambda.return_type = p->workspace->type_def_void;
             }
             return type_definition;
         }
@@ -629,7 +634,7 @@ Ast_Type_Definition *parse_type_definition(Parser *parser, Ast_Expression *type_
             Ast_Type_Definition *literal_type_defn = parse_literal_type(parser, ident->name);
             if (literal_type_defn) return literal_type_defn;
 
-            Ast_Type_Definition *defn = make_type_definition(parser, type_expression->location);
+            Ast_Type_Definition *defn = make_type_definition(parser, type_expression->location, TYPE_DEF_IDENT);
             defn->type_name = ident;
             return defn;
         }
@@ -640,7 +645,7 @@ Ast_Type_Definition *parse_type_definition(Parser *parser, Ast_Expression *type_
                 parser_report_error(parser, type_expression->location, "Here we expected a type, but we got unary operator '%c'.", unary->operator_type);
             }
                 
-            Ast_Type_Definition *defn = make_type_definition(parser, type_expression->location);
+            Ast_Type_Definition *defn = make_type_definition(parser, type_expression->location, TYPE_DEF_POINTER);
 
             // Unroll unary '*'.
             // while (type_expression->kind == AST_UNARY_OPERATOR) {
@@ -672,7 +677,7 @@ Ast_Type_Definition *parse_type_definition(Parser *parser, Ast_Expression *type_
             parser_report_error(parser, type_expression->location, "Here we expected a type, but we got an initializer argument list.");
 
         case AST_PROCEDURE_CALL: {
-            Ast_Type_Definition *defn = make_type_definition(parser, type_expression->location);
+            Ast_Type_Definition *defn = make_type_definition(parser, type_expression->location, TYPE_DEF_STRUCT_CALL);
             defn->struct_call = (Ast_Procedure_Call *)type_expression;
             return defn;
         }
@@ -683,36 +688,36 @@ Ast_Type_Definition *parse_type_definition(Parser *parser, Ast_Expression *type_
     switch (token.type) {
     case '*': {
         eat_next_token(parser);
-        Ast_Type_Definition *defn = make_type_definition(parser, token.location);
+        Ast_Type_Definition *defn = make_type_definition(parser, token.location, TYPE_DEF_POINTER);
         defn->pointer_to = parse_type_definition(parser, NULL);
         return defn;
     }
     case '[': {
         eat_next_token(parser);
 
-        Ast_Type_Definition *defn = make_type_definition(parser, token.location);
+        Ast_Type_Definition *defn = make_type_definition(parser, token.location, TYPE_DEF_ARRAY);
 
         token = peek_next_token(parser);
         switch (token.type) {
         case ']':
             eat_next_token(parser); // ]
-            defn->array_length = -1;
-            defn->array_element_type = parse_type_definition(parser, NULL);
+            defn->array.length = -1;
+            defn->array.element_type = parse_type_definition(parser, NULL);
             return defn;
         case TOKEN_NUMBER:
             eat_next_token(parser); // number
-            if (flag_has(token.number_flags, NUMBER_FLAGS_FLOAT)) {
+            if (token.number_flags & NUMBER_FLAGS_FLOAT) {
                 parser_report_error(parser, token.location, "Array length cannot be a float.");
             }
             eat_token_type(parser, ']', "Missing closing bracket after array length.");
-            defn->array_length = token.integer_value;
-            defn->array_element_type = parse_type_definition(parser, NULL);
+            defn->array.length = token.integer_value;
+            defn->array.element_type = parse_type_definition(parser, NULL);
             return defn;
         case TOKEN_DOUBLE_DOT:
             eat_next_token(parser); // ..
             eat_token_type(parser, ']', "Missing closing bracket after array length.");
-            defn->array_length = -1; // TODO: How do we separate dynamic and slice?
-            defn->array_element_type = parse_type_definition(parser, NULL);
+            defn->array.length = LLONG_MIN;
+            defn->array.element_type = parse_type_definition(parser, NULL);
             return defn;
         default:
             parser_report_error(parser, token.location, "Here we expected a type, but we got '%s'.", token_type_to_string(token.type));
@@ -724,13 +729,13 @@ Ast_Type_Definition *parse_type_definition(Parser *parser, Ast_Expression *type_
         Ast_Type_Definition *literal_type_defn = parse_literal_type(parser, token.string_value);
         if (literal_type_defn) return literal_type_defn;
 
-        Ast_Type_Definition *defn = make_type_definition(parser, token.location);
+        Ast_Type_Definition *defn = make_type_definition(parser, token.location, TYPE_DEF_IDENT);
         defn->type_name = make_identifier(parser, token);
         return defn;
     }
     case '(': {
         Ast_Type_Definition *lambda_type = parse_lambda_type(parser);
-        Exit_Block(parser, lambda_type->lambda_arguments_block);
+        Exit_Block(parser, lambda_type->lambda.arguments_block);
         return lambda_type;
     }
     case TOKEN_KEYWORD_STRUCT:
@@ -984,9 +989,12 @@ void parse_declaration_value(Parser *p, Ast_Declaration *decl)
         // If we have a block, we need to set it on the declaration.
         if (decl->root_expression->kind == AST_TYPE_DEFINITION) {
             Ast_Type_Definition *defn = xx decl->root_expression;
-            if (defn->struct_desc) decl->my_block = defn->struct_desc->block;
-            if (defn->enum_defn) decl->my_block = defn->enum_defn->block;
-            if (defn->lambda_return_type) decl->my_block = defn->lambda_arguments_block;
+            switch (defn->kind) {
+            case TYPE_DEF_STRUCT: decl->my_block = defn->struct_desc->block; break;
+            case TYPE_DEF_ENUM:   decl->my_block = defn->enum_defn->block; break;
+            case TYPE_DEF_LAMBDA: decl->my_block = defn->lambda.arguments_block; break;
+            default: break;
+            }
         }
 
         return;
@@ -1370,37 +1378,44 @@ void print_type_to_builder(String_Builder *sb, const Ast_Type_Definition *defn)
         return;
     }
 
-    if (defn->struct_desc) {
-        assert(0);
-    } else if (defn->enum_defn) {
-        assert(0);
-    } else if (defn->type_name) {
+    switch (defn->kind) {
+    case TYPE_DEF_ANY:
+    //     print_type_to_builder(sb, defn->any_default_type);
+    //     break;
+    case TYPE_DEF_NUMBER:
+    case TYPE_DEF_LITERAL:
+        sb_append_cstr(sb, defn->name);
+        break;
+    case TYPE_DEF_STRUCT:
+        UNIMPLEMENTED;
+    case TYPE_DEF_ENUM:
+        UNIMPLEMENTED;
+    case TYPE_DEF_IDENT:
         sb_append_cstr(sb, "`"); // nocheckin: this is so we can see that it's an identifier.
         sb_append(sb, defn->type_name->name.data, defn->type_name->name.count);
-    } else if (defn->struct_call) {
-        assert(0);
-    } else if (defn->pointer_to) {
+        break;
+    case TYPE_DEF_STRUCT_CALL:
+    case TYPE_DEF_POINTER:
         sb_append(sb, "*", 1);
         print_type_to_builder(sb, defn->pointer_to);
-    } else if (defn->array_element_type) {
-        if (defn->array_length < 0) {
+        break;
+    case TYPE_DEF_ARRAY:
+        if (defn->array.length < 0) {
             sb_append_cstr(sb, "[] ");
         } else {
-            sb_print(sb, "[%lld] ", defn->array_length);
+            sb_print(sb, "[%lld] ", defn->array.length);
         }
-        print_type_to_builder(sb, defn->array_element_type);
-    } else if (defn->literal_name) {
-        sb_append_cstr(sb, defn->literal_name);
-    } else if (defn->lambda_return_type) {
+        print_type_to_builder(sb, defn->array.element_type);
+        break;
+    case TYPE_DEF_LAMBDA:
         sb_append_cstr(sb, "(");
-        For (defn->lambda_argument_types) {
+        For (defn->lambda.argument_types) {
             if (it > 0) sb_append_cstr(sb, ", ");
-            print_type_to_builder(sb, defn->lambda_argument_types[it]);
+            print_type_to_builder(sb, defn->lambda.argument_types[it]);
         }
         sb_append_cstr(sb, ") -> ");
-        print_type_to_builder(sb, defn->lambda_return_type);
-    } else {
-        UNREACHABLE;
+        print_type_to_builder(sb, defn->lambda.return_type);
+        break;
     }
 }
 
