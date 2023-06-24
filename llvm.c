@@ -301,8 +301,8 @@ LLVMValueRef llvm_build_lvalue(Workspace *w, Ast_Expression *expr)
             "");
     }
     default:
-        fprintf(stderr, "Internal Error: '%s' is not an lvalue.\n", expr_to_string(expr));
-        exit(1);
+        report_error(w, expr->location, "This cannot be used as an lvalue (this is an internal error).");
+        return NULL;
     }
 }
 
@@ -416,22 +416,8 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
             
         if (selector->struct_field_index >= 0) {
             LLVMTypeRef field_type = llvm_get_type(w, selector->_expression.inferred_type);
-            LLVMTypeRef struct_type = llvm_get_type(w, selector->namespace_expression->inferred_type);
-#if 1
-
-            LLVMValueRef struct_pointer = llvm_build_lvalue(w, selector->namespace_expression);
-            LLVMValueRef field_pointer = LLVMBuildStructGEP2(
-                llvm.builder,
-                struct_type,
-                struct_pointer,
-                selector->struct_field_index,
-                "");
-
+            LLVMValueRef field_pointer = llvm_build_lvalue(w, expr);
             return LLVMBuildLoad2(llvm.builder, field_type, field_pointer, "");
-#else
-            LLVMValueRef field_pointer = llvm_build_lvalue(w, selector);
-            return LLVMBuildLoad2(llvm.builder, field_type, field_pointer, "");
-#endif
         }
 
         assert(0);
