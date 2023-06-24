@@ -1,12 +1,26 @@
 main :: () -> int {
-    x := 5;
-    y: *int = *x;
+    s: string;
+    
+    pos: Vector3;
+    pos.x = 432;
 
-    s := "Hello, World";
-    print_integer(69);
+    z: int = pos.x;
+    print_integer(z as s32);
+
+    y := *pos.x;
+    y.* = 5;
+    print_integer(pos.x as s32);
+
+    s = "Hello, World";
     puts(s.data);
-    exit(1);
+
     return 0;
+}
+
+Vector3 :: struct {
+    x: int;
+    y: int;
+    z: int;
 }
 
 is_alpha :: (c: u8) -> bool {
@@ -15,14 +29,16 @@ is_alpha :: (c: u8) -> bool {
 
 print_integer :: (x_: s32) {
     x := x_;
-    if x > s32.{9} {
-        a := x / s32.{10};
-        x -= a * s32.{10};
+    if x > 9 {
+        a := x / 10;
+        x -= a * 10;
         print_integer(a);
     }
     putchar(x + CHR_ZERO);
     CHR_ZERO : s32 : 48;
 }
+
+printf :: (format: *u8, ..) #foreign;
 
 puts :: (s: *u8) -> int #foreign;
 putchar :: (c: s32) -> int #foreign;

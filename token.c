@@ -73,6 +73,7 @@ static Token_Type parse_keyword_or_ident_token_type(String_View s)
     switch (s.count) {
     case 2:
         if (sv_eq2(s, SV("if"))) return TOKEN_KEYWORD_IF;
+        if (sv_eq2(s, SV("as"))) return TOKEN_KEYWORD_AS;
         break;
     case 3:
         if (sv_eq2(s, SV("for"))) return TOKEN_KEYWORD_FOR;

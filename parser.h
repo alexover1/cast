@@ -65,6 +65,7 @@ struct Ast_Expression {
     // @Volatile: Both of these are set during type-checking.
     Ast_Type_Definition *inferred_type;
     Ast_Expression *replacement;
+    bool is_value_of_constant_declaration;
 };
 
 typedef enum {
@@ -123,6 +124,7 @@ typedef struct {
         unsigned long integer;
         double real;
     } as;
+    bool inferred_type_is_final;
 } Ast_Number;
 
 typedef enum {
@@ -206,7 +208,6 @@ typedef enum {
     TYPE_DEF_POINTER = 7,
     TYPE_DEF_ARRAY = 8,
     TYPE_DEF_LAMBDA = 9,
-    TYPE_DEF_ANY = 10,
 } Ast_Type_Kind;
 
 struct Ast_Type_Definition {
@@ -236,6 +237,7 @@ struct Ast_Type_Definition {
             Ast_Block *arguments_block;
             Ast_Type_Definition *return_type;
             Ast_Type_Definition **argument_types; // Pointers to the lambda's argument declarations, not copies.
+            bool variadic;
         } lambda;
         Ast_Type_Definition *any_default_type; // TYPE_DEF_ANY
     };
@@ -256,7 +258,7 @@ typedef struct {
 
     Ast_Expression *namespace_expression;
     Ast_Ident *ident; // The identifier we are looking up.
-    bool is_pointer_dereference; // If so, member_name will be NULL.
+    bool is_pointer_dereference; // If so, ident will be NULL.
 
     Ast_Declaration *resolved_declaration;
     int struct_field_index;

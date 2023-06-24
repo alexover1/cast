@@ -95,7 +95,7 @@ void flatten_expr_for_typechecking(Ast_Declaration *root, Ast_Expression *expr);
 void flatten_stmt_for_typechecking(Ast_Declaration *root, Ast_Statement *stmt);
 void flatten_decl_for_typechecking(Ast_Declaration *decl);
 
-void check_that_types_match(Workspace *w, Ast_Expression *expr, Ast_Type_Definition *type);
+bool check_that_types_match(Workspace *w, Ast_Expression *expr, Ast_Type_Definition *type);
 bool types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y);
 
 Ast_Literal *make_literal(Literal_Kind kind);

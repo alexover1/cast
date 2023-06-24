@@ -96,8 +96,6 @@ LLVMTypeRef llvm_get_type(Workspace *w, const Ast_Type_Definition *defn)
     assert(defn);
     while (defn->_expression.replacement) defn = xx defn->_expression.replacement; // TODO: We should store ** in the typechecker so this goes away.
     switch (defn->kind) {
-    case TYPE_DEF_ANY:
-        assert(0);
     case TYPE_DEF_NUMBER:
         if (defn->number.flags & NUMBER_FLAGS_FLOAT) {
             // Floating-point type.
@@ -286,16 +284,19 @@ LLVMValueRef llvm_build_lvalue(Workspace *w, Ast_Expression *expr)
     }
     case AST_SELECTOR: {
         const Ast_Selector *selector = xx expr;
-        LLVMTypeRef type = llvm_get_type(w, selector->namespace_expression->inferred_type);
-        LLVMValueRef pointer = llvm_build_lvalue(w, selector->namespace_expression);
+        LLVMTypeRef struct_type = llvm_get_type(w, selector->namespace_expression->inferred_type);
+        LLVMValueRef struct_pointer = llvm_build_lvalue(w, selector->namespace_expression);
+
         if (selector->is_pointer_dereference) {
-            return LLVMBuildLoad2(llvm.builder, type, pointer, "");
+            return LLVMBuildLoad2(llvm.builder, struct_type, struct_pointer, "");
         }
+
         assert(selector->struct_field_index >= 0);
         return LLVMBuildStructGEP2(
             llvm.builder,
-            llvm_get_type(w, selector->_expression.inferred_type),
-            pointer,
+            // llvm_get_type(w, selector->_expression.inferred_type),
+            struct_type,
+            struct_pointer,
             selector->struct_field_index,
             "");
     }
@@ -390,8 +391,25 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
         report_error(w, expr->location, "Types cannot be used as values in our LLVM implementation yet.");
     case AST_CAST: {
         const Ast_Cast *cast = xx expr;
+        assert(cast->type->size >= 0);
+        assert(cast->subexpression->inferred_type->size >= 0);
+
         LLVMTypeRef dest_type = llvm_get_type(w, cast->type);
-        return LLVMBuildBitCast(llvm.builder, llvm_build_expression(w, cast->subexpression), dest_type, "");
+        LLVMValueRef value = llvm_build_expression(w, cast->subexpression);
+
+        LLVMOpcode opcode;
+        
+        if (cast->type->size > cast->subexpression->inferred_type->size) {
+            // For now, we always do a zero-extending cast (this seems closest to bitcast).
+            // Sign extension cast will probably be a separate instruction or a modifier on the "as" keyword.
+            opcode = LLVMZExt;
+        } else if (cast->type->size < cast->subexpression->inferred_type->size) {
+            opcode = LLVMTrunc;
+        } else {
+            opcode = LLVMBitCast;
+        }
+        
+        return LLVMBuildCast(llvm.builder, opcode, value, dest_type, "");
     }
     case AST_SELECTOR: {
         const Ast_Selector *selector = xx expr;
@@ -545,29 +563,48 @@ void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *st
     }
     case AST_ASSIGNMENT: {
         Ast_Assignment *assign = xx stmt;
+        Ast_Type_Definition *defn = assign->pointer->inferred_type;
 
-        if (assign->pointer->kind == AST_IDENT) {
-            Ast_Ident *ident = xx assign->pointer;
-            Ast_Type_Definition *defn = assign->pointer->inferred_type;
+        LLVMValueRef pointer = llvm_build_lvalue(w, assign->pointer);
+        LLVMValueRef value = llvm_build_expression(w, assign->value);
 
-            LLVMValueRef pointer = ident->resolved_declaration->llvm_value;
-            LLVMValueRef value = llvm_build_expression(w, assign->value);
-
-            if (assign->operator_type == '=') {
-                LLVMBuildStore(llvm.builder, value, pointer);
-                break;
-            }
-
-            // Otherwise, build the arithmetic.
-            LLVMIntPredicate int_predicate;
-            LLVMRealPredicate real_predicate;
-            LLVMOpcode opcode = llvm_get_opcode(assign->operator_type, defn, &int_predicate, &real_predicate);
-
-            LLVMValueRef current = LLVMBuildLoad2(llvm.builder, llvm_get_type(w, defn), pointer, "");
-            LLVMValueRef new_value = LLVMBuildBinOp(llvm.builder, opcode, current, value, "");
-            LLVMBuildStore(llvm.builder, new_value, pointer);
+        if (assign->operator_type == '=') {
+            LLVMBuildStore(llvm.builder, value, pointer);
             break;
         }
+
+        // Otherwise, build the arithmetic.
+        LLVMIntPredicate int_predicate;
+        LLVMRealPredicate real_predicate;
+        LLVMOpcode opcode = llvm_get_opcode(assign->operator_type, defn, &int_predicate, &real_predicate);
+
+        LLVMValueRef current = LLVMBuildLoad2(llvm.builder, llvm_get_type(w, defn), pointer, "");
+        LLVMValueRef new_value = LLVMBuildBinOp(llvm.builder, opcode, current, value, "");
+        LLVMBuildStore(llvm.builder, new_value, pointer);
+        break;
+
+        // if (assign->pointer->kind == AST_IDENT) {
+        //     Ast_Ident *ident = xx assign->pointer;
+        //     Ast_Type_Definition *defn = assign->pointer->inferred_type;
+
+        //     LLVMValueRef pointer = ident->resolved_declaration->llvm_value;
+        //     LLVMValueRef value = llvm_build_expression(w, assign->value);
+
+        //     if (assign->operator_type == '=') {
+        //         LLVMBuildStore(llvm.builder, value, pointer);
+        //         break;
+        //     }
+
+        //     // Otherwise, build the arithmetic.
+        //     LLVMIntPredicate int_predicate;
+        //     LLVMRealPredicate real_predicate;
+        //     LLVMOpcode opcode = llvm_get_opcode(assign->operator_type, defn, &int_predicate, &real_predicate);
+
+        //     LLVMValueRef current = LLVMBuildLoad2(llvm.builder, llvm_get_type(w, defn), pointer, "");
+        //     LLVMValueRef new_value = LLVMBuildBinOp(llvm.builder, opcode, current, value, "");
+        //     LLVMBuildStore(llvm.builder, new_value, pointer);
+        //     break;
+        // }
 
         UNIMPLEMENTED;
     }

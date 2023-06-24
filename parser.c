@@ -84,7 +84,7 @@ static int operator_precedence_from_token_type(int type)
 static inline void eat_semicolon(Parser *parser, Source_Location stmt_location)
 {
     Token token = eat_next_token(parser);
-    if (token.type != ';') {
+    if (token.type != ';' && !parser->reported_error) {
         parser_report_error(parser, token.location, "Expected semicolon after statement.");
         parser_report_error(parser, stmt_location, "... the statement began here.");
     }
@@ -114,7 +114,6 @@ static bool expression_requires_semicolon(Ast_Expression *expr)
         case TYPE_DEF_LAMBDA:
         case TYPE_DEF_LITERAL:
         case TYPE_DEF_STRUCT_CALL:
-        case TYPE_DEF_ANY:
             return true;
         }
     }
@@ -291,6 +290,15 @@ Ast_Expression *parse_primary_expression(Parser *p, Ast_Expression *base)
             base = xx call;
             break;
         }
+        case TOKEN_KEYWORD_AS: {
+            eat_next_token(p);
+            Ast_Cast *cast = ast_alloc(p, token.location, AST_CAST, sizeof(*cast));
+            cast->type = parse_type_definition(p, NULL);
+            cast->subexpression = base;
+
+            base = xx cast;
+            break;
+        }
         default:
             return base;
         }
@@ -386,7 +394,7 @@ Ast_Expression *parse_base_expression(Parser *p)
         UNIMPLEMENTED;
     }
 
-    parser_report_error(p, token.location, "Expected a base expression (operand) but got %s.", token_type_to_string(token.type));
+    if (!p->reported_error) parser_report_error(p, token.location, "Expected a base expression (operand) but got %s.", token_type_to_string(token.type));
     return NULL;
 }
 
@@ -557,6 +565,20 @@ Ast_Type_Definition *parse_lambda_type(Parser *p)
     unsigned count = 0;
 
     while (1) {
+        if (peek_next_token(p).type == TOKEN_DOUBLE_DOT) {
+            eat_next_token(p);
+            type_definition->lambda.variadic = true;
+            eat_token_type(p, ')', "Expected ',' or ')' after lambda argument declaration.");
+            token = peek_next_token(p); 
+            if (token.type == TOKEN_RIGHT_ARROW) {
+                eat_next_token(p);
+                type_definition->lambda.return_type = parse_type_definition(p, NULL);
+            } else {
+                type_definition->lambda.return_type = p->workspace->type_def_void;
+            }
+            return type_definition;
+        }
+        
         Ast_Declaration *parameter = parse_lambda_argument(p, count);
 
         assert(parameter->my_type); // TODO: We want to be able to put "name := value" in procedure type.
@@ -792,6 +814,8 @@ void parse_into_block(Parser *p, Ast_Block *block)
             // TODO: Print where the block started.
             // TODO: How can we make this type of error message better? We want to be able
             // to track the exact place where we are missing a brace, not just the end.
+            Exit_Block(p, block);
+            return;
         }
 
         Ast_Statement *stmt = parse_statement(p);
@@ -806,7 +830,10 @@ void parse_into_block(Parser *p, Ast_Block *block)
             if (token.type == ';') eat_next_token(p);
         }
 
-        if (p->reported_error) return;
+        if (p->reported_error) {
+            Exit_Block(p, block);
+            return;
+        }
     }
 
     UNREACHABLE;
@@ -1379,15 +1406,19 @@ void print_type_to_builder(String_Builder *sb, const Ast_Type_Definition *defn)
     }
 
     switch (defn->kind) {
-    case TYPE_DEF_ANY:
-    //     print_type_to_builder(sb, defn->any_default_type);
-    //     break;
     case TYPE_DEF_NUMBER:
     case TYPE_DEF_LITERAL:
         sb_append_cstr(sb, defn->name);
         break;
     case TYPE_DEF_STRUCT:
-        UNIMPLEMENTED;
+        sb_append_cstr(sb, "struct { ");
+        For (defn->struct_desc->block->declarations) {
+            if (defn->struct_desc->block->declarations[it]->flags & DECLARATION_IS_CONSTANT) continue;
+            if (it > 0) sb_append_cstr(sb, ", ");
+            print_decl_to_builder(sb, defn->struct_desc->block->declarations[it], 0);
+        }
+        sb_append_cstr(sb, " }");
+        break;
     case TYPE_DEF_ENUM:
         UNIMPLEMENTED;
     case TYPE_DEF_IDENT:

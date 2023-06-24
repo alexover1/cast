@@ -58,6 +58,7 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
                 decl->typechecking_position += 1;
             } else {
                 // Hit a roadblock.
+#if 0
                 Source_Location loc = node->expression->location;
                 String_View name = decl->ident ? decl->ident->name : sv_from_cstr("<unnamed>");
                 printf(Loc_Fmt": WAITING: Declaration '"SV_Fmt"' is waiting on: %s\n",
@@ -65,6 +66,7 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
                     Loc_Arg(loc),
                     SV_Arg(name),
                     expr_to_string(node->expression));
+#endif
                 return;
             }
         }
@@ -99,15 +101,11 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
         Replace(decl->root_expression);
         assert(decl->root_expression->inferred_type);
 
-        Ast_Type_Definition *defn = decl->root_expression->inferred_type;
-
-        if (defn->kind == TYPE_DEF_ANY && !(decl->flags & DECLARATION_IS_CONSTANT)) {
-            // Substitute compile-time literal types.
-            defn = defn->any_default_type;
-            decl->root_expression->inferred_type = defn;
+        if (decl->root_expression->kind == AST_NUMBER) {
+            ((Ast_Number *)decl->root_expression)->inferred_type_is_final = true;
         }
 
-        decl->my_type = defn;
+        decl->my_type = decl->root_expression->inferred_type;
         decl->flags |= DECLARATION_TYPE_WAS_INFERRED_FROM_EXPRESSION;
         goto done;
     }
@@ -120,6 +118,9 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
     }
 
     if (!decl->root_expression) {
+#if 0
+        printf("Default value for: %s\n", type_to_string(decl->my_type));
+#endif
         // We're definitely not a constant (this error is checked above).
         // So we just set the default value for the type.
         decl->root_expression = generate_default_value_for_type(w, decl->my_type);
@@ -148,30 +149,16 @@ done:
     decl->flags |= DECLARATION_HAS_BEEN_TYPECHECKED;
 }
 
-Ast_Type_Definition *generate_default_type_for_value(Workspace *w, Ast_Expression *expr)
-{
-    if (expr->kind == AST_LITERAL) {
-        Ast_Literal *literal = xx expr;
-        switch (literal->kind) {
-        case LITERAL_STRING: return w->type_def_string; break;
-        case LITERAL_BOOL:   return w->type_def_bool;   break;
-        case LITERAL_NULL:
-            report_error(w, expr->location, "Cannot use null with no specified type (help: add a type hint).");
-        }
-    }
-    return expr->inferred_type;
-}
-
 Ast_Expression *generate_default_value_for_type(Workspace *w, Ast_Type_Definition *type)
 {
     switch (type->kind) {
-    case TYPE_DEF_ANY:
     case TYPE_DEF_NUMBER:
         return xx make_number(0);
     case TYPE_DEF_LITERAL:
         return xx make_literal(type->literal);
     case TYPE_DEF_STRUCT: {
         Ast_Type_Instantiation *inst = context_alloc(sizeof(*inst));
+        inst->_expression.kind = AST_TYPE_INSTANTIATION;
         inst->type_definition = type;
         For (type->struct_desc->block->declarations) {
             Ast_Declaration *field = type->struct_desc->block->declarations[it];
@@ -183,7 +170,8 @@ Ast_Expression *generate_default_value_for_type(Workspace *w, Ast_Type_Definitio
     }
     case TYPE_DEF_ENUM:
         UNIMPLEMENTED;
-    case TYPE_DEF_IDENT: 
+    case TYPE_DEF_IDENT:
+        assert(0);
         return generate_default_value_for_type(w, xx type->type_name->resolved_declaration->root_expression);
     case TYPE_DEF_STRUCT_CALL:
         UNIMPLEMENTED;
@@ -192,6 +180,7 @@ Ast_Expression *generate_default_value_for_type(Workspace *w, Ast_Type_Definitio
     case TYPE_DEF_ARRAY: {
         // Fill in default values.
         Ast_Type_Instantiation *inst = context_alloc(sizeof(*inst));
+        inst->_expression.kind = AST_TYPE_INSTANTIATION;
         inst->type_definition = type;
         return xx inst;
     }
@@ -205,17 +194,6 @@ Ast_Expression *autocast_to_bool(Workspace *w, Ast_Expression *expr)
     Ast_Type_Definition *defn = expr->inferred_type;
     Replace_Type(defn);
     switch (defn->kind) {
-    case TYPE_DEF_ANY: {
-        assert(expr->kind == AST_NUMBER);
-        Ast_Number *number = xx expr;
-        if (number->flags & NUMBER_FLAGS_FLOAT) return NULL; // Float doesn't cast to bool.
-            
-        Ast_Literal *literal = make_literal(LITERAL_BOOL);
-        literal->_expression.location = expr->location;
-        literal->_expression.inferred_type = w->type_def_bool;
-        literal->bool_value = number->as.integer == 0;
-        return xx literal;
-    }
     case TYPE_DEF_NUMBER: {
         // TODO: This might be able to be checked at compile-time if the expression is constant.
         Ast_Binary_Operator *binary = context_alloc(sizeof(*binary));
@@ -317,20 +295,17 @@ Ast_Expression *autocast_to_bool(Workspace *w, Ast_Expression *expr)
 void typecheck_number(Workspace *w, Ast_Number *number, Ast_Type_Definition *supplied_type)
 {
     if (!supplied_type) {
-        Ast_Type_Definition *defn = context_alloc(sizeof(*defn));
-        defn->_expression.kind = AST_TYPE_DEFINITION;
-        defn->_expression.location = number->_expression.location;
-        defn->_expression.inferred_type = w->type_def_type;
-        defn->name = "<any number>";
-        defn->kind = TYPE_DEF_ANY;
+        // Ast_Type_Definition *defn = context_alloc(sizeof(*defn));
+        // defn->_expression.kind = AST_TYPE_DEFINITION;
+        // defn->_expression.location = number->_expression.location;
+        // defn->_expression.inferred_type = w->type_def_type;
+        // defn->name = "<any number>";
+        // defn->kind = TYPE_DEF_ANY;
 
-        if (number->flags & NUMBER_FLAGS_FLOAT64)    defn->any_default_type = w->type_def_float64;
-        else if (number->flags & NUMBER_FLAGS_FLOAT) defn->any_default_type = w->type_def_float;
-        else                                         defn->any_default_type = w->type_def_int;
-
-        number->_expression.inferred_type = defn;
+        if (number->flags & NUMBER_FLAGS_FLOAT64)    number->_expression.inferred_type = w->type_def_float64;
+        else if (number->flags & NUMBER_FLAGS_FLOAT) number->_expression.inferred_type = w->type_def_float;
+        else                                         number->_expression.inferred_type = w->type_def_int;
         return;
-        
     }
 
     if (supplied_type->kind != TYPE_DEF_NUMBER) {
@@ -587,11 +562,7 @@ Ast_Type_Definition *typecheck_binary_arithmetic(Workspace *w, char operator_typ
 
     // The types must be equal, and they also must be numbers.
 
-    if (left->inferred_type->kind == TYPE_DEF_ANY && right->inferred_type->kind == TYPE_DEF_ANY) {
-        assert(0);
-    }
-
-    if (!types_are_equal(left->inferred_type, right->inferred_type)) {
+    if (!check_that_types_match(w, right, left->inferred_type)) {
         report_error(w, site, "Type mismatch: Types on either side of '%s' must be the same (got %s and %s).",
             token_type_to_string(operator_type), type_to_string(left->inferred_type), type_to_string(right->inferred_type));
     }
@@ -610,7 +581,7 @@ Ast_Type_Definition *typecheck_binary_arithmetic(Workspace *w, char operator_typ
 
 void typecheck_binary_comparison(Workspace *w, char operator_type, Source_Location site, Ast_Expression *left, Ast_Expression *right)
 {
-    if (!types_are_equal(left->inferred_type, right->inferred_type)) {
+    if (!check_that_types_match(w, right, left->inferred_type)) {
         report_error(w, site, "Type mismatch: Types on either side of '%s' must be the same (got %s and %s).",
             token_type_to_string(operator_type), type_to_string(left->inferred_type), type_to_string(right->inferred_type));
     }
@@ -713,11 +684,12 @@ void typecheck_procedure_call(Workspace *w, Ast_Procedure_Call *call)
     if (m > n) report_error(w, call->_expression.location, "Not enough arguments for procedure call (wanted %zu but got %zu).", m, n);
 
     for (size_t i = 0; i < n; ++i) {
-        check_that_types_match(w, call->arguments[i], proc->lambda.argument_types[i]);
+        if (!check_that_types_match(w, call->arguments[i], proc->lambda.argument_types[i])) {
+            report_error(w, call->arguments[i]->location, "Argument type mismatch: Wanted %s but got %s.",
+                type_to_string(proc->lambda.argument_types[i]), type_to_string(call->arguments[i]->inferred_type));
+        }
         
         // if (!types_are_equal(call->arguments[i]->inferred_type, proc->lambda.argument_types[i])) {
-        //     report_error(w, call->arguments[i]->location, "Argument type mismatch: Wanted %s but got %s.",
-        //         type_to_string(proc->lambda.argument_types[i]), type_to_string(call->arguments[i]->inferred_type));
         // }
     }
 
@@ -912,7 +884,6 @@ void typecheck_selector(Workspace *w, Ast_Selector *selector)
     case TYPE_DEF_POINTER: {
         report_error(w, site, "Dereferencing members through a pointer type is currently not implemented (this is an internal error).");
     }
-    case TYPE_DEF_ANY:
     case TYPE_DEF_NUMBER:
     case TYPE_DEF_LAMBDA:
         report_error(w, selector->namespace_expression->location, "Attempt to dereference a non-namespaced type (got type %s).",
@@ -1011,8 +982,6 @@ void typecheck_instantiation(Workspace *w, Ast_Type_Instantiation *inst)
         UNIMPLEMENTED;
     case TYPE_DEF_LAMBDA:
         report_error(w, site, "Currently, you cannot instantiate a function pointer using an initializer list.");
-    case TYPE_DEF_ANY:
-        UNREACHABLE;
     }
 
     inst->_expression.inferred_type = defn;
@@ -1072,14 +1041,10 @@ void typecheck_return(Workspace *w, Ast_Return *ret)
 
     Ast_Type_Definition *expected_type = ret->lambda_i_belong_to->type_definition->lambda.return_type;
 
-    check_that_types_match(w, ret->subexpression, expected_type);
-    
-    // Ast_Type_Definition *actual_type = ret->subexpression->inferred_type;
-
-    // if (!types_are_equal(expected_type, actual_type)) {
-    //     report_error(w, ret->subexpression->location, "Return type mismatch: Wanted %s but got %s.",
-    //         type_to_string(expected_type), type_to_string(actual_type));
-    // }
+    if (!check_that_types_match(w, ret->subexpression, expected_type)) {
+        report_error(w, ret->subexpression->location, "Return type mismatch: Wanted %s but got %s.",
+            type_to_string(expected_type), type_to_string(ret->subexpression->inferred_type));
+    }
 }
 
 void typecheck_using(Workspace *w, Ast_Using *using)
@@ -1096,18 +1061,24 @@ inline void typecheck_variable(Workspace *w, Ast_Variable *var)
 
 void typecheck_assignment(Workspace *w, Ast_Assignment *assign)
 {
-    assert(assign->pointer->kind == AST_IDENT); // TODO: a.b.c
+    if (assign->pointer->kind == AST_IDENT) {
+        Ast_Ident *ident = xx assign->pointer;
+        if (ident->resolved_declaration->flags & DECLARATION_IS_CONSTANT) {
+            report_error(w, ident->_expression.location, "Cannot assign to constant.");
+        }
 
-    Ast_Ident *ident = xx assign->pointer;
-    if (ident->resolved_declaration->flags & DECLARATION_IS_CONSTANT) {
-        report_error(w, ident->_expression.location, "Cannot assign to constant.");
+        goto end;
     }
 
-    Ast_Type_Definition *expected = assign->pointer->inferred_type;
-    Ast_Type_Definition *actual = assign->value->inferred_type;
-    if (!types_are_equal(actual, expected)) {
+    // Here we must be assigning to a selector, and we must not be constant
+    // otherwise we *should* have been replaced in typecheck_selector.
+
+    assert(assign->pointer->kind == AST_SELECTOR);
+
+end:
+    if (!check_that_types_match(w, assign->value, assign->pointer->inferred_type)) {
         report_error(w, assign->value->location, "Type mismatch: Wanted %s but got %s.",
-            type_to_string(expected), type_to_string(actual));
+            type_to_string(assign->pointer->inferred_type), type_to_string(assign->value->inferred_type));
     }
 }
 
@@ -1246,6 +1217,7 @@ void flatten_stmt_for_typechecking(Ast_Declaration *root, Ast_Statement *stmt)
     case AST_VARIABLE: {
         Ast_Variable *var = xx stmt;
         // TODO: Is this right?
+        flatten_expr_for_typechecking(root, xx var->declaration->my_type);
         flatten_expr_for_typechecking(root, var->declaration->root_expression);
         break;
     }
@@ -1282,17 +1254,19 @@ void flatten_decl_for_typechecking(Ast_Declaration *decl)
     }
 }
 
-void check_that_types_match(Workspace *w, Ast_Expression *expr, Ast_Type_Definition *type)
+bool check_that_types_match(Workspace *w, Ast_Expression *expr, Ast_Type_Definition *type)
 {
-    if (types_are_equal(expr->inferred_type, type)) return;
+    if (types_are_equal(expr->inferred_type, type)) return true;
 
-    if (expr->kind == AST_NUMBER && expr->inferred_type->kind == TYPE_DEF_ANY) {
-        typecheck_number(w, xx expr, type);
-        return;
+    if (expr->kind == AST_NUMBER) {
+        Ast_Number *number = xx expr;
+        if (!number->inferred_type_is_final) {
+            typecheck_number(w, number, type);
+            return true;
+        }
     }
 
-    report_error(w, expr->location, "Type mismatch: Wanted %s but got %s.",
-        type_to_string(type), type_to_string(expr->inferred_type));
+    return false;
 }
 
 bool types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y)
