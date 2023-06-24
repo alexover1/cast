@@ -442,6 +442,18 @@ void typecheck_unary_operator(Workspace *w, Ast_Unary_Operator *unary)
         unary->_expression.inferred_type = make_pointer_type(unary->subexpression->inferred_type);
         return;
     }
+
+    if (unary->operator_type == '!') {
+        Ast_Expression *expr = autocast_to_bool(w, unary->subexpression);
+        if (expr) {
+            unary->subexpression = expr;
+        } else {
+            report_error(w, unary->subexpression->location, "Type mismatch: Wanted bool but got %s.",
+                type_to_string(unary->subexpression->inferred_type));
+        }
+        unary->_expression.inferred_type = w->type_def_bool;
+        return;
+    }
     
     UNIMPLEMENTED;
 }
@@ -984,13 +996,14 @@ void typecheck_instantiation(Workspace *w, Ast_Type_Instantiation *inst)
         if (arrlenu(inst->arguments) != 1) {
             report_error(w, site, "Can only instantiate literal types with 1 argument.");
         }
+
         Ast_Expression *value = inst->arguments[0];
-        if (value->kind == AST_NUMBER) {
-            typecheck_number(w, xx value, defn);
-        } else if (!types_are_equal(value->inferred_type, defn)) {
+
+        if (!check_that_types_match(w, value, defn)) {
             report_error(w, value->location, "Type mismatch: Wanted %s but got %s.",
                 type_to_string(defn), type_to_string(value->inferred_type));
         }
+            
         inst->_expression.replacement = value;
         break;
     }
@@ -1022,7 +1035,7 @@ void typecheck_instantiation(Workspace *w, Ast_Type_Instantiation *inst)
         int n = arrlen(inst->arguments);
         int m = defn->array.length;
         if (n != m) {
-            report_error(w, site, "Incorrect number of arguments for array literal (wanted %d but got %lld).", m, n);
+            report_error(w, site, "Incorrect number of arguments for array literal (wanted %d but got %d).", m, n);
         }
         for (int i = 0; i < n; ++i) {
             Ast_Type_Definition *arg = inst->arguments[i]->inferred_type;
@@ -1040,11 +1053,12 @@ void typecheck_instantiation(Workspace *w, Ast_Type_Instantiation *inst)
             report_error(w, site, "Incorrect number of arguments to instantiate struct type (wanted %d but got %d).", m, n);
         }
         for (int i = 0; i < n; ++i) {
+            Ast_Expression *arg = inst->arguments[i];
             Ast_Type_Definition *expected = defn->struct_desc->field_types[i];
-            Ast_Type_Definition *actual = inst->arguments[i]->inferred_type;
-            if (!types_are_equal(actual, expected)) {
+
+            if (!check_that_types_match(w, arg, expected)) {
                 report_error(w, inst->arguments[i]->location, "Field type mismatch: Wanted %s but got %s.",
-                    type_to_string(expected), type_to_string(actual));
+                    type_to_string(expected), type_to_string(arg->inferred_type));
             }
         }
         break;
@@ -1212,6 +1226,9 @@ void flatten_expr_for_typechecking(Ast_Declaration *root, Ast_Expression *expr)
         Ast_Type_Definition *defn = xx expr;
         switch (defn->kind) {
         // TODO: When enum->underlying_int_type can be an alias, it needs to be added here.
+        case TYPE_DEF_POINTER:
+            flatten_expr_for_typechecking(root, xx defn->type_name);
+            break;
         case TYPE_DEF_STRUCT:
             flatten_stmt_for_typechecking(root, xx defn->struct_desc->block);
             break;

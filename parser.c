@@ -268,7 +268,7 @@ Ast_Expression *parse_primary_expression(Parser *p, Ast_Expression *base)
             UNIMPLEMENTED;
         case '(': {
             eat_next_token(p);
-            Ast_Procedure_Call *call = ast_alloc(p, token.location, AST_PROCEDURE_CALL, sizeof(*call));
+            Ast_Procedure_Call *call = ast_alloc(p, base->location, AST_PROCEDURE_CALL, sizeof(*call));
             call->procedure_expression = base;
 
             if (peek_next_token(p).type == ')') {

@@ -236,7 +236,18 @@ Token find_next_token(Parser *parser)
     } break;
     case '+': parse_maybe_equals_token(parser, &token, TOKEN_PLUSEQUALS); break;
     case '*': parse_maybe_equals_token(parser, &token, TOKEN_TIMESEQUALS); break;
-    case '/': parse_maybe_equals_token(parser, &token, TOKEN_DIVEQUALS); break;
+    // case '/': parse_maybe_equals_token(parser, &token, TOKEN_DIVEQUALS); break;
+    case '/': {
+        int d = peek_character(parser);
+        if (d == '=') {
+            eat_character(parser);
+            token.type = TOKEN_DIVEQUALS;
+        } else if (d == '/') {
+            eat_character(parser);
+            parser->current_line.count = 0; // Drop the line.
+            return find_next_token(parser); // Discard the current token.
+        }
+    } break;
     case '%': parse_maybe_equals_token(parser, &token, TOKEN_MODEQUALS); break;
     case '=': parse_maybe_equals_token(parser, &token, TOKEN_ISEQUAL); break;
     case '!': parse_maybe_equals_token(parser, &token, TOKEN_ISNOTEQUAL); break;

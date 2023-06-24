@@ -141,7 +141,8 @@ LLVMTypeRef llvm_get_type(Workspace *w, const Ast_Type_Definition *defn)
     case TYPE_DEF_STRUCT_CALL:
         UNIMPLEMENTED;
     case TYPE_DEF_IDENT:
-        UNREACHABLE;
+        report_error(w, defn->_expression.location, "This identifier was not replaced by the type-checker (this is an internal error).");
+        return NULL; // Note: This would cause a segfault if report_error didn't call exit();
     case TYPE_DEF_LAMBDA: {
         size_t arg_count = arrlenu(defn->lambda.argument_types);
         LLVMTypeRef *param_types = arena_alloc(&temporary_arena, sizeof(LLVMTypeRef) * arg_count);
@@ -353,6 +354,12 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
             return llvm_build_lvalue(w, unary->subexpression);
         }       
 
+        if (unary->operator_type == '!') {
+            LLVMValueRef value = llvm_build_expression(w, unary->subexpression);
+            if (!value) return NULL;
+            return LLVMBuildNot(llvm.builder, value, "");
+        }
+
         UNIMPLEMENTED;
     }
     case AST_BINARY_OPERATOR: {
@@ -467,6 +474,10 @@ void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *st
         break;
     }
     case AST_WHILE: {
+        LLVMBasicBlockRef basic_block_loop = LLVMAppendBasicBlock(function, "loop");
+        LLVMBuildBr(llvm.builder, basic_block_loop); // Implicit break from current block to the loop.
+        LLVMPositionBuilderAtEnd(llvm.builder, basic_block_loop);
+
         const Ast_While *while_stmt = xx stmt;
         LLVMValueRef condition = llvm_build_expression(w, while_stmt->condition_expression);
             
@@ -478,7 +489,7 @@ void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *st
         // Emit the "then" statement.
         LLVMPositionBuilderAtEnd(llvm.builder, basic_block_then);
         llvm_build_statement(w, function, while_stmt->then_statement);
-        LLVMBuildCondBr(llvm.builder, condition, basic_block_then, basic_block_merge);
+        LLVMBuildCondBr(llvm.builder, condition, basic_block_loop, basic_block_merge);
             
         // Emit code for the merge block.
         LLVMPositionBuilderAtEnd(llvm.builder, basic_block_merge);
@@ -517,6 +528,15 @@ void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *st
         // Emit code for the merge block.
         LLVMPositionBuilderAtEnd(llvm.builder, basic_block_merge);
         break;
+    }
+    // case AST_FOR: {
+    //     LLVMBasicBlockRef basic_block_loop = LLVMAppendBasicBlock(function, "for_loop");
+    //     LLVMBuildBr(llvm.builder, basic_block_loop); // Implicit break from current block to the loop.
+    //     LLVMPositionBuilderAtEnd(llvm.builder, basic_block_loop);
+        
+    // }
+    case AST_LOOP_CONTROL: {
+        
     }
     case AST_RETURN: {
         const Ast_Return *ret = xx stmt;
