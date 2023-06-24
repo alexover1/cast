@@ -239,7 +239,6 @@ struct Ast_Type_Definition {
             Ast_Type_Definition **argument_types; // Pointers to the lambda's argument declarations, not copies.
             bool variadic;
         } lambda;
-        Ast_Type_Definition *any_default_type; // TYPE_DEF_ANY
     };
 
     // bool any; // TODO: Document what this means.

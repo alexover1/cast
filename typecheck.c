@@ -136,7 +136,12 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
     // Check if my_type is a numeric type and root_expression is a literal.
 
     if (decl->root_expression->kind == AST_NUMBER) {
-        typecheck_number(w, xx decl->root_expression, decl->my_type);
+        if (decl->flags & DECLARATION_IS_ENUM_VALUE) {
+            assert(decl->my_type->kind == TYPE_DEF_ENUM); // Because it was set in parse_enum_defn().
+            typecheck_number(w, xx decl->root_expression, decl->my_type->enum_defn->underlying_int_type);
+        } else {
+            typecheck_number(w, xx decl->root_expression, decl->my_type);
+        }
     } else {
         // Check that we're not doing something like `x: bool = 12345`.
         if (!types_are_equal(decl->my_type, decl->root_expression->inferred_type)) {
@@ -615,6 +620,7 @@ void typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary)
         // Technically, LLVM does this for us, but let's not rely on that.
         if (left->kind == AST_NUMBER && right->kind == AST_NUMBER) {
             binary->_expression.replacement = fold_binary_arithmetic_or_comparison(w, (char)binary->operator_type, xx left, xx right);
+            binary->_expression.replacement->inferred_type = left->inferred_type; // TODO: check this.
             break;
         }
         binary->_expression.inferred_type = typecheck_binary_arithmetic(w, (char)binary->operator_type, binary->_expression.location, left, right);
@@ -653,8 +659,47 @@ void typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary)
         }
         binary->_expression.inferred_type = w->type_def_bool;
         break;
-    case TOKEN_POINTER_DEREFERENCE_OR_SHIFT_LEFT:
-    case TOKEN_SHIFT_RIGHT:
+    case TOKEN_SHIFT_LEFT:
+    case TOKEN_SHIFT_RIGHT: {
+        if (!check_that_types_match(w, right, left->inferred_type)) {
+            report_error(w, binary->_expression.location, "Type mismatch: Types on either side of '%s' must be the same (got %s and %s).",
+                token_type_to_string(binary->operator_type), type_to_string(left->inferred_type), type_to_string(right->inferred_type));
+        }
+
+        Ast_Type_Definition *defn = left->inferred_type; // Now they are the same.
+
+        if (defn->kind != TYPE_DEF_NUMBER) {
+            report_error(w, binary->_expression.location, "Type mismatch: Operator '%s' does not work on non-number types (got %s).",
+                token_type_to_string(binary->operator_type), type_to_string(defn));
+        }
+
+        if (defn->number.flags & NUMBER_FLAGS_FLOAT) {
+            report_error(w, binary->_expression.location, "Type mismatch: Operator '%s' does not work on floating-point types (got %s).",
+                token_type_to_string(binary->operator_type), type_to_string(defn));
+        }
+
+        // Check for constants.
+        if (left->kind == AST_NUMBER && right->kind == AST_NUMBER) {
+            unsigned long l, r, result;
+            l = ((Ast_Number *)left)->as.integer;
+            r = ((Ast_Number *)right)->as.integer;
+            if (binary->operator_type == TOKEN_SHIFT_LEFT) {
+                result = l << r;
+            } else {
+                result = l >> r;
+            }
+            Ast_Number *number = make_number(result);
+            number->_expression.inferred_type = w->type_def_int; // Because this can be changed at any point.
+            number->_expression.location = binary->_expression.location;
+
+            binary->_expression.replacement = xx number;
+            break;
+        }
+
+        binary->_expression.inferred_type = defn;
+        break;
+    }
+        
     case TOKEN_ARRAY_SUBSCRIPT:
         UNIMPLEMENTED;
     }
@@ -680,10 +725,14 @@ void typecheck_procedure_call(Workspace *w, Ast_Procedure_Call *call)
     size_t n = arrlenu(call->arguments);
     size_t m = arrlenu(proc->lambda.argument_types);
     
-    if (n > m) report_error(w, call->_expression.location, "Too many arguments for procedure call (wanted %zu but got %zu).", m, n);
-    if (m > n) report_error(w, call->_expression.location, "Not enough arguments for procedure call (wanted %zu but got %zu).", m, n);
+    if (n < m) report_error(w, call->_expression.location, "Not enough arguments for procedure call (wanted %zu but got %zu).", m, n);
 
-    for (size_t i = 0; i < n; ++i) {
+    if (n > m && !proc->lambda.variadic) {
+        report_error(w, call->_expression.location, "Too many arguments for procedure call (wanted %zu but got %zu).", m, n);
+    }
+
+    // Note: We iterate up to m here because if we are variadic, there may be more arguments passed than the function takes.
+    for (size_t i = 0; i < m; ++i) {
         if (!check_that_types_match(w, call->arguments[i], proc->lambda.argument_types[i])) {
             report_error(w, call->arguments[i]->location, "Argument type mismatch: Wanted %s but got %s.",
                 type_to_string(proc->lambda.argument_types[i]), type_to_string(call->arguments[i]->inferred_type));
@@ -827,6 +876,32 @@ void typecheck_selector(Workspace *w, Ast_Selector *selector)
     }
     
     // Otherwise we actually need to do a member lookup.
+
+    if (defn == w->type_def_type) {
+        assert(selector->namespace_expression->kind == AST_TYPE_DEFINITION);
+        defn = xx selector->namespace_expression;
+
+        // TODO: Handle struct.constant
+        if (defn->kind == TYPE_DEF_ENUM) {
+            Ast_Declaration *decl = find_declaration_in_block(defn->enum_defn->block, selector->ident->name);
+            if (!decl) {
+                report_error(w, site, "Enum has no member '"SV_Fmt"'.", SV_Arg(selector->ident->name));
+            }
+
+            // Cache this in case we can't proceed and need to return here later.
+            selector->resolved_declaration = decl;
+
+            if (!(decl->flags & DECLARATION_HAS_BEEN_TYPECHECKED)) return;
+
+            assert(decl->flags & DECLARATION_IS_CONSTANT);
+            selector->_expression.inferred_type = decl->my_type;
+            selector->_expression.replacement = decl->root_expression;
+            return;
+        }
+
+        report_error(w, selector->namespace_expression->location, "Attempt to dereference a non-namespaced type (got type %s).",
+            type_to_string(defn));
+    }
 
     switch (defn->kind) {
     case TYPE_DEF_IDENT:
@@ -1135,8 +1210,21 @@ void flatten_expr_for_typechecking(Ast_Declaration *root, Ast_Expression *expr)
     }
     case AST_TYPE_DEFINITION: {
         Ast_Type_Definition *defn = xx expr;
-        if (defn->kind == TYPE_DEF_STRUCT) flatten_stmt_for_typechecking(root, xx defn->struct_desc->block);
-        if (defn->kind == TYPE_DEF_IDENT)  flatten_expr_for_typechecking(root, xx defn->type_name);
+        switch (defn->kind) {
+        // TODO: When enum->underlying_int_type can be an alias, it needs to be added here.
+        case TYPE_DEF_STRUCT:
+            flatten_stmt_for_typechecking(root, xx defn->struct_desc->block);
+            break;
+        case TYPE_DEF_IDENT:
+            flatten_expr_for_typechecking(root, xx defn->type_name);                
+            break;
+        case TYPE_DEF_LAMBDA:
+            For (defn->lambda.argument_types) flatten_expr_for_typechecking(root, xx defn->lambda.argument_types[it]);
+            flatten_expr_for_typechecking(root, xx defn->lambda.return_type);
+            break;
+        default:
+            break;
+        }
         break;
     }
     case AST_CAST: {
@@ -1256,12 +1344,35 @@ void flatten_decl_for_typechecking(Ast_Declaration *decl)
 
 bool check_that_types_match(Workspace *w, Ast_Expression *expr, Ast_Type_Definition *type)
 {
+    Replace_Type(type);
+    
     if (types_are_equal(expr->inferred_type, type)) return true;
 
+    // Handle constant numeric values that can implicitly cast to most types.
     if (expr->kind == AST_NUMBER) {
         Ast_Number *number = xx expr;
+
         if (!number->inferred_type_is_final) {
             typecheck_number(w, number, type);
+            return true;
+        }
+    }
+
+    // Strings can be converted to integers if they are exactly one character.
+    if (expr->kind == AST_LITERAL) {
+        Ast_Literal *literal = xx expr;
+        if (literal->kind == LITERAL_STRING && (type->kind == TYPE_DEF_NUMBER && !(type->number.flags & NUMBER_FLAGS_FLOAT))) {
+            if (literal->string_value.count != 1) {
+                report_error(w, expr->location, "Strings can only convert to integers if they are exactly one character.");
+            }
+
+            Ast_Number *char_literal = context_alloc(sizeof(*char_literal));
+            char_literal->_expression.kind = AST_NUMBER;
+            char_literal->_expression.location = expr->location;
+            char_literal->_expression.inferred_type = type;
+            char_literal->as.integer = *literal->string_value.data;
+
+            expr->replacement = xx char_literal;
             return true;
         }
     }

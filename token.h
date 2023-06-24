@@ -33,7 +33,7 @@ typedef enum {
     TOKEN_DOUBLE_DOT = 271,
     // 272 is unused
 
-    TOKEN_POINTER_DEREFERENCE_OR_SHIFT_LEFT = 273,
+    TOKEN_SHIFT_LEFT = 273,
     TOKEN_SHIFT_RIGHT = 274,
     // 275 is unused
     TOKEN_BITWISE_AND_EQUALS = 276,

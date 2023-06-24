@@ -265,7 +265,7 @@ Token find_next_token(Parser *parser)
         int d = peek_character(parser);
         if (d == '<') {
             eat_character(parser);
-            token.type = TOKEN_POINTER_DEREFERENCE_OR_SHIFT_LEFT;
+            token.type = TOKEN_SHIFT_LEFT;
         } else if (d == '=') {
             eat_character(parser);
             token.type = TOKEN_LESSEQUALS;
@@ -443,7 +443,7 @@ const char *token_type_to_string(int type)
     case TOKEN_RIGHT_ARROW: return "->";
     case TOKEN_DOUBLE_DOT: return "..";
 
-    case TOKEN_POINTER_DEREFERENCE_OR_SHIFT_LEFT: return "<<";
+    case TOKEN_SHIFT_LEFT: return "<<";
     case TOKEN_SHIFT_RIGHT: return ">>";
     case TOKEN_BITWISE_AND_EQUALS: return "&=";
     case TOKEN_BITWISE_OR_EQUALS: return "|=";

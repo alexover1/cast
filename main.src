@@ -1,31 +1,36 @@
 main :: () -> int {
-    s: string;
-    
-    pos: Vector3;
-    pos.x = 432;
-
-    z: int = pos.x;
-    print_integer(z as s32);
-
-    y := *pos.x;
-    y.* = 5;
-    print_integer(pos.x as s32);
-
-    s = "Hello, World";
-    puts(s.data);
-
+    title := "My Application";
+    SDL_Init(SDL_INIT_VIDEO);
+    w := SDL_CreateWindow(title.data, 0, 0, 800, 600, SDL_WindowFlags.RESIZABLE);
+    SDL_Delay(2000);
+    SDL_DestroyWindow(w);
+    SDL_Quit();
     return 0;
 }
 
-Vector3 :: struct {
-    x: int;
-    y: int;
-    z: int;
+SDL_INIT_VIDEO : u32 : 32;
+SDL_Init :: (flags: u32) -> s32 #foreign;
+SDL_CreateWindow :: (title: *u8, x: s32, y: s32, width: s32, height: s32, flags: SDL_WindowFlags) -> *void #foreign;
+SDL_Delay :: (ms: u32) #foreign;
+SDL_DestroyWindow :: (window: *void) #foreign;
+SDL_Quit :: () #foreign;
+
+SDL_WindowFlags :: enum u32 {
+    FULLSCREEN :: 1 << 0;
+    OPENGL :: 1 << 1;
+    SHOWN :: 1 << 2;
+    HIDDEN :: 1 << 3;
+    BORDERLESS :: 1 << 4;
+    RESIZABLE :: 1 << 5;
+    MINIMIZED :: 1 << 6;
+    MAXIMIZED :: 1 << 7;
 }
 
-is_alpha :: (c: u8) -> bool {
-    return true;
-}
+printf :: (format: *u8, ..) #foreign;
+
+puts :: (s: *u8) -> int #foreign;
+putchar :: (c: s32) -> int #foreign;
+exit :: (status: s32) #foreign;
 
 print_integer :: (x_: s32) {
     x := x_;
@@ -34,12 +39,5 @@ print_integer :: (x_: s32) {
         x -= a * 10;
         print_integer(a);
     }
-    putchar(x + CHR_ZERO);
-    CHR_ZERO : s32 : 48;
+    putchar(x + "0");
 }
-
-printf :: (format: *u8, ..) #foreign;
-
-puts :: (s: *u8) -> int #foreign;
-putchar :: (c: s32) -> int #foreign;
-exit :: (status: s32) #foreign;

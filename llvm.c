@@ -149,7 +149,7 @@ LLVMTypeRef llvm_get_type(Workspace *w, const Ast_Type_Definition *defn)
             param_types[it] = llvm_get_type(w, defn->lambda.argument_types[it]);
         }
         LLVMTypeRef return_type = llvm_get_type(w, defn->lambda.return_type);
-        return LLVMFunctionType(return_type, param_types, arg_count, 0); // 0 means not variadic
+        return LLVMFunctionType(return_type, param_types, arg_count, defn->lambda.variadic);
     }       
     }
 }

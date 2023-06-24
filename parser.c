@@ -71,7 +71,7 @@ static int operator_precedence_from_token_type(int type)
     case '*':
     case '/':
     case '%':
-    case TOKEN_POINTER_DEREFERENCE_OR_SHIFT_LEFT:
+    case TOKEN_SHIFT_LEFT:
     case TOKEN_SHIFT_RIGHT:
     case '&':
         return 5;
@@ -93,7 +93,9 @@ static inline void eat_semicolon(Parser *parser, Source_Location stmt_location)
 static inline Token eat_token_type(Parser *parser, Token_Type type, const char *error_message)
 {
     Token token = eat_next_token(parser);
-    if (token.type != (int)type) {
+    // TODO: If we already reported an error, we just return the next token no matter what it is.
+    // This can lead to some errors because you expect a token to be of a certain type and it may not be.
+    if (token.type != (int)type && !parser->reported_error) {
         parser_report_error(parser, token.location, error_message);
     }
     return token;
@@ -198,7 +200,6 @@ Ast_Expression *parse_unary_expression(Parser *p)
     case '*':
     case '!':
     case TOKEN_BITWISE_NOT:
-    case TOKEN_POINTER_DEREFERENCE_OR_SHIFT_LEFT:
     {
         eat_next_token(p);
         Ast_Unary_Operator *unary = ast_alloc(p, token.location, AST_UNARY_OPERATOR, sizeof(*unary));
@@ -311,9 +312,15 @@ Ast_Expression *parse_base_expression(Parser *p)
 {
     Token token = peek_next_token(p);
     switch (token.type) {
-    case TOKEN_IDENT:
+    case TOKEN_IDENT: {
         eat_next_token(p);
+
+        // Check if we are a type.
+        Ast_Type_Definition *literal_type_defn = parse_literal_type(p, token.string_value);
+        if (literal_type_defn) return xx literal_type_defn;
+            
         return xx make_identifier(p, token);
+    }
         
     case TOKEN_NUMBER: {
         eat_next_token(p);
@@ -515,17 +522,65 @@ Ast_Type_Definition *parse_enum_defn(Parser *p)
     Token token = eat_next_token(p);
     assert(token.type == TOKEN_KEYWORD_ENUM);
 
-    // TODO: parse underling integer type like "enum u8 {...}"
-    
     Ast_Enum *enum_defn = arena_alloc(p->arena, sizeof(*enum_defn));
+    Ast_Type_Definition *defn = make_type_definition(p, token.location, TYPE_DEF_ENUM);
+    defn->enum_defn = enum_defn;
+
+    // Parse underlying int type.
+    token = peek_next_token(p);
+    if (token.type == TOKEN_IDENT) {
+        eat_next_token(p);
+        enum_defn->underlying_int_type = parse_literal_type(p, token.string_value);
+        if (!enum_defn->underlying_int_type) {
+            parser_report_error(p, token.location, "Expected an integer literal type name after 'enum' (aliases are not currently implemented).");
+            return defn;
+        }
+    } else {
+        enum_defn->underlying_int_type = p->workspace->type_def_u32; // TODO: check this.
+    }
+
+    token = eat_token_type(p, '{', "Expected '{' after 'enum'.");
+
     enum_defn->block = ast_alloc(p, token.location, AST_BLOCK, sizeof(*enum_defn->block));
     enum_defn->block->belongs_to = BLOCK_BELONGS_TO_ENUM;
     enum_defn->block->belongs_to_data = enum_defn;
 
-    parse_into_block(p, enum_defn->block);
+    while (1) {
+        if (peek_next_token(p).type == '}') {
+            eat_next_token(p);
+            return defn;
+        }
+        
+        token = eat_token_type(p, TOKEN_IDENT, "Expected an identifier to start enum member declaration.");
+        eat_token_type(p, ':', "Expected ':' after identifier.");
+        if (p->reported_error) return defn;
 
-    Ast_Type_Definition *defn = make_type_definition(p, token.location, TYPE_DEF_ENUM);
-    defn->enum_defn = enum_defn;
+        // After the first colon, we usually expect a type or ':' or '='.
+        // However, enums members can't have different types, so we don't allow a type,
+        // and we also don't allow non-constant members because you can't "allocate" an enum.
+        Token eq_or_colon = eat_next_token(p);
+        if (eq_or_colon.type == '=') {
+            // TODO: Should we print the location of the start of the declaration (the identifier) or the location of the '='?
+            parser_report_error(p, eq_or_colon.location, "Enum members must be declared as constant (replace '=' with ':').");
+            return defn;
+        }
+        if (eq_or_colon.type != ':') {
+            parser_report_error(p, eq_or_colon.location, "Expected ':' after ':'.");   
+            return defn;
+        }
+
+        Ast_Expression *value = parse_expression(p);
+        eat_token_type(p, ';', "Expected semicolon after declaration.");
+        Ast_Declaration *member = make_declaration(p, token.location);
+        member->ident = make_identifier(p, token);
+        member->my_type = defn; // The type of the declaration is the enum type.
+        member->root_expression = value;
+        member->flags = DECLARATION_IS_CONSTANT | DECLARATION_IS_ENUM_VALUE;
+        arrput(enum_defn->block->declarations, member);
+
+        if (p->reported_error) return defn;
+    }
+    
     return defn;
 }
 
@@ -978,6 +1033,7 @@ Ast_Statement *parse_statement(Parser *p)
 
         // Parse assignment.
         Ast_Expression *expr = parse_expression(p);
+        if (!expr) return NULL;
         token = peek_next_token(p);
         switch (token.type) {
         case '=':
@@ -996,6 +1052,7 @@ Ast_Statement *parse_statement(Parser *p)
     }
 
     Ast_Expression *expr = parse_expression(p);
+    if (!expr) return NULL;
     Ast_Expression_Statement *stmt = ast_alloc(p, expr->location, AST_EXPRESSION_STATEMENT, sizeof(*stmt));
     stmt->subexpression = expr;
     return xx stmt;
@@ -1105,6 +1162,8 @@ Ast_Block *parse_toplevel(Parser *p)
     p->current_block = ast_alloc(p, (Source_Location){0}, AST_BLOCK, sizeof(Ast_Block));
 
     while (1) {
+        if (p->reported_error) return p->current_block;
+
         Token token = peek_next_token(p);
         if (token.type == TOKEN_END_OF_INPUT) {
             eat_next_token(p);
@@ -1122,8 +1181,6 @@ Ast_Block *parse_toplevel(Parser *p)
             token = peek_next_token(p);
             if (token.type == ';') eat_next_token(p);
         }
-
-        if (p->reported_error) return p->current_block;
     }
 
     UNREACHABLE;
@@ -1420,7 +1477,9 @@ void print_type_to_builder(String_Builder *sb, const Ast_Type_Definition *defn)
         sb_append_cstr(sb, " }");
         break;
     case TYPE_DEF_ENUM:
-        UNIMPLEMENTED;
+        // TODO: What do we do here?
+        sb_append_cstr(sb, "enum");
+        break;
     case TYPE_DEF_IDENT:
         sb_append_cstr(sb, "`"); // nocheckin: this is so we can see that it's an identifier.
         sb_append(sb, defn->type_name->name.data, defn->type_name->name.count);
