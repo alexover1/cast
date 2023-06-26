@@ -1,4 +1,5 @@
 main
 out
-*.out
 *.llvm
+*.asm
+*.o

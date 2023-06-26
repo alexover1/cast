@@ -488,6 +488,9 @@ const char *token_type_to_string(int type)
 
     case TOKEN_ERROR: return "invalid token";
 
+    case TOKEN_ARRAY_SUBSCRIPT: return "array subscript";
+    case TOKEN_POINTER_DEREFERENCE: return "pointer dereference";
+
     default: return "**INVALID**";
     }
 }

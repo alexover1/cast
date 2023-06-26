@@ -41,6 +41,7 @@ typedef enum {
     TOKEN_BITWISE_XOR_EQUALS = 278,
 
     TOKEN_ARRAY_SUBSCRIPT = 279, // Not a token, but needed to work as a binary node in the parse tree.
+    TOKEN_POINTER_DEREFERENCE = 280, // Also not a token, need for unary node.
     
     TOKEN_KEYWORD_IF,
     TOKEN_KEYWORD_THEN,

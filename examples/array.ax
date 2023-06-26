@@ -1,0 +1,106 @@
+array_test :: () {
+	array: [5] u64;
+	
+	format := "The array at %p has %lld elements\n";
+	printf(format.data, *array, array.count);
+
+	i: u64 = 0;
+	while i < array.count {
+		array[i] = i * 2;
+		i += 1;
+	}
+
+	format = "%p: %lld\n";
+	printf(format.data, *array[0], array[0]);
+	printf(format.data, *array[1], array[1]);
+	printf(format.data, *array[2], array[2]);
+	printf(format.data, *array[3], array[3]);
+	printf(format.data, *array[4], array[4]);
+}
+
+slice_test :: () {
+	array: [5] u64;
+
+	i: u64 = 0;
+	while i < array.count {
+		array[i] = i * 2;
+		i += 1;
+	}
+	
+	slice: [] u64;
+	slice.data = *array[0];
+	slice.count = array.count;
+	
+	slice[0] = 10;
+	
+	format := "%lld\n";
+	printf(format.data, slice[0]);
+	printf(format.data, slice[1]);
+	printf(format.data, slice[2]);
+	printf(format.data, slice[3]);
+	printf(format.data, slice[4]);
+
+	format = "The sum of the array is %lld\n";
+	printf(format.data, sum(slice));
+}
+
+struct_packing :: () {
+	Rectangle :: struct {
+		// color: [4] u8;
+		byte: u8;
+		width: u32;
+		height: u32;
+	}
+
+	rect := Rectangle.{170, 100, 200};
+
+	packed_array: [2] u64;
+
+	// Note: Once we have implicit array to slice this will go away.
+	slice: [] u64;
+	slice.data = *packed_array[0];
+	slice.count = packed_array.count;
+	pack_struct((*rect) as *u8, 12, slice); // TODO: size_of
+
+	i := 0;
+	while i < packed_array.count {
+		format := "0x%llx\n";
+		printf(format.data, packed_array[i]);
+		i += 1;
+	}
+}
+
+main :: () -> int {
+	array_test();
+	slice_test();
+	// struct_packing();
+	return 0;
+}
+
+sum :: (array: [] u64) -> u64 {
+	sum: u64;
+	i := 0;
+	while i < array.count {
+		sum += array[i];
+		i += 1;
+	}
+	return sum;
+}
+
+pack_struct :: (input: *u8, input_size: int, output: []u64) {
+    output_index: u64 = 0;
+
+    cursor := input;
+    end := input + input_size;
+
+    while cursor < end {
+        array_index: u64 = output_index / 64;
+        bit_index: u64 = output_index % 64;
+        mask := input.* as u64 << bit_index;
+        output[array_index] |= mask;
+        output_index += 8;
+        cursor = cursor + 1;
+    }
+}
+
+printf :: (format: *u8, ..) #foreign;

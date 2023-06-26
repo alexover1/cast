@@ -5,8 +5,13 @@
 #include "common.h"
 #include "workspace.h"
 
+#define Replace_Type(type) do { \
+    while (type->_expression.replacement) type = xx type->_expression.replacement; \
+} while(0)
+
 // For now, who cares if we zero terminate? I don't see any problems. And it lets you call c functions easier.
 #define DONT_ZERO_TERMINATE 0
+#define USE_STRUCT_PACKING 0
 
 void workspace_setup_llvm(Workspace *w)
 {
@@ -127,16 +132,22 @@ LLVMTypeRef llvm_get_type(Workspace *w, const Ast_Type_Definition *defn)
             count += 1;
         }
        
-        return LLVMStructTypeInContext(llvm.context, field_types, count, 1); // 1 means packed
+        return LLVMStructTypeInContext(llvm.context, field_types, count, USE_STRUCT_PACKING);
     }
     case TYPE_DEF_ENUM:
         return LLVMInt32TypeInContext(llvm.context);
     case TYPE_DEF_POINTER:
         return LLVMPointerType(llvm_get_type(w, defn->pointer_to), 0);
     case TYPE_DEF_ARRAY: {
-        if (defn->array.length == -1) return llvm.slice_type;
-        if (defn->array.length == LLONG_MIN) return llvm.dynamic_array_type;
-        return LLVMArrayType(llvm_get_type(w, defn->array.element_type), defn->array.length);
+        switch (defn->array.kind) {
+        case ARRAY_KIND_FIXED:
+            // return LLVMPointerTypeInContext(llvm.context, 0);
+            return LLVMArrayType(llvm_get_type(w, defn->array.element_type), defn->array.length);
+        case ARRAY_KIND_SLICE:
+            return llvm.slice_type;
+        case ARRAY_KIND_DYNAMIC:
+            return llvm.dynamic_array_type;
+        }
     }
     case TYPE_DEF_STRUCT_CALL:
         UNIMPLEMENTED;
@@ -147,7 +158,18 @@ LLVMTypeRef llvm_get_type(Workspace *w, const Ast_Type_Definition *defn)
         size_t arg_count = arrlenu(defn->lambda.argument_types);
         LLVMTypeRef *param_types = arena_alloc(&temporary_arena, sizeof(LLVMTypeRef) * arg_count);
         For (defn->lambda.argument_types) {
-            param_types[it] = llvm_get_type(w, defn->lambda.argument_types[it]);
+            Replace_Type(defn->lambda.argument_types[it]);
+            // if (defn->lambda.argument_types[it]->kind == TYPE_DEF_STRUCT) {
+            //     assert(defn->size >= 0);
+            //     const int num_i64s = (defn->size + 7) / 8;
+
+            //     param_types[it] = LLVMArrayType(LLVMInt64TypeInContext(llvm.context), num_i64s);
+                   
+            //     // We need to pass it by pointer but with the byval attribute.
+            //     // param_types[it] = LLVMPointerTypeInContext(llvm.context, 0);
+            // } else {
+                param_types[it] = llvm_get_type(w, defn->lambda.argument_types[it]);
+            // }
         }
         LLVMTypeRef return_type = llvm_get_type(w, defn->lambda.return_type);
         return LLVMFunctionType(return_type, param_types, arg_count, defn->lambda.variadic);
@@ -192,9 +214,11 @@ LLVMOpcode llvm_get_opcode(int operator_type, Ast_Type_Definition *defn, LLVMInt
         return LLVMURem;
     case TOKEN_BITWISE_AND:
     case TOKEN_LOGICAL_AND:
+    case TOKEN_BITWISE_AND_EQUALS:
         return LLVMAnd;
     case TOKEN_BITWISE_OR:
     case TOKEN_LOGICAL_OR:
+    case TOKEN_BITWISE_OR_EQUALS:
         return LLVMOr;
     case TOKEN_ISEQUAL:
         if (defn->kind == TYPE_DEF_NUMBER) {
@@ -226,6 +250,10 @@ LLVMOpcode llvm_get_opcode(int operator_type, Ast_Type_Definition *defn, LLVMInt
         LLVM_COMPARISON_PREDICATE(LLVMRealOGE, LLVMIntSGE, LLVMIntUGE);
     case TOKEN_LESSEQUALS:
         LLVM_COMPARISON_PREDICATE(LLVMRealOLE, LLVMIntSLE, LLVMIntULE);
+    case TOKEN_SHIFT_LEFT:
+        return LLVMShl;
+    case TOKEN_SHIFT_RIGHT:
+        return LLVMAShr; // TODO: check this.
     default:
         printf("Unhandled binary operator type: %s\n", token_type_to_string(operator_type));
         assert(0);
@@ -268,10 +296,10 @@ LLVMValueRef llvm_const_string(Llvm llvm, const char *data, size_t count)
     };
             
     return LLVMConstStructInContext(llvm.context,
-        struct_fields, sizeof(struct_fields)/sizeof(struct_fields[0]), 1);
+        struct_fields, sizeof(struct_fields)/sizeof(struct_fields[0]), USE_STRUCT_PACKING);
 }
 
-LLVMValueRef llvm_build_lvalue(Workspace *w, Ast_Expression *expr)
+LLVMValueRef llvm_build_pointer(Workspace *w, Ast_Expression *expr)
 {
     Llvm llvm = w->llvm;
     while (expr->replacement) expr = expr->replacement;
@@ -286,25 +314,137 @@ LLVMValueRef llvm_build_lvalue(Workspace *w, Ast_Expression *expr)
     case AST_SELECTOR: {
         const Ast_Selector *selector = xx expr;
         LLVMTypeRef struct_type = llvm_get_type(w, selector->namespace_expression->inferred_type);
-        LLVMValueRef struct_pointer = llvm_build_lvalue(w, selector->namespace_expression);
-
-        if (selector->is_pointer_dereference) {
-            return LLVMBuildLoad2(llvm.builder, struct_type, struct_pointer, "");
-        }
+        LLVMValueRef struct_pointer = llvm_build_pointer(w, selector->namespace_expression);
 
         assert(selector->struct_field_index >= 0);
-        return LLVMBuildStructGEP2(
-            llvm.builder,
-            // llvm_get_type(w, selector->_expression.inferred_type),
-            struct_type,
-            struct_pointer,
-            selector->struct_field_index,
-            "");
+
+        // @Speed: This is all just for debugging.
+        String_View struct_name;
+        struct_name.data = LLVMGetValueName2(struct_pointer, &struct_name.count);
+        char *name = tprint(SV_Fmt".%d", SV_Arg(struct_name), selector->struct_field_index);
+        
+        return LLVMBuildStructGEP2(llvm.builder, struct_type, struct_pointer, selector->struct_field_index, name);
+    }
+    case AST_UNARY_OPERATOR: {           
+        Ast_Unary_Operator *unary = xx expr;
+
+        if (unary->operator_type == TOKEN_POINTER_DEREFERENCE) {
+            LLVMTypeRef type = llvm_get_type(w, unary->subexpression->inferred_type);
+            LLVMValueRef pointer = llvm_build_pointer(w, unary->subexpression);
+                
+            // @Speed: This is all just for debugging.
+            String_View pointer_name;
+            pointer_name.data = LLVMGetValueName2(pointer, &pointer_name.count);
+            char *name = tprint(SV_Fmt".deref", SV_Arg(pointer_name));
+                
+            return LLVMBuildLoad2(llvm.builder, type, pointer, name);
+        }
+    }
+    case AST_BINARY_OPERATOR: {
+        Ast_Binary_Operator *binary = xx expr;
+
+        if (binary->operator_type == TOKEN_ARRAY_SUBSCRIPT) {
+            LLVMValueRef array_pointer = llvm_build_pointer(w, binary->left);
+            LLVMValueRef index = llvm_build_expression(w, binary->right);
+
+            if (binary->left->inferred_type->array.kind != ARRAY_KIND_FIXED) {
+                // @Speed: This is all just for debugging.
+                String_View array_name;
+                array_name.data = LLVMGetValueName2(array_pointer, &array_name.count);
+                char *name = tprint(SV_Fmt".deref", SV_Arg(array_name));
+
+                array_pointer = LLVMBuildLoad2(llvm.builder, LLVMTypeOf(array_pointer), array_pointer, name);
+            }
+                
+            // @Speed: This is all just for debugging.
+            String_View array_name;
+            array_name.data = LLVMGetValueName2(array_pointer, &array_name.count);
+            char *name = tprint(SV_Fmt".elem", SV_Arg(array_name));
+                
+            return LLVMBuildGEP2(llvm.builder, LLVMTypeOf(array_pointer), array_pointer, &index, 1, name);
+        }
+
+        // Must be pointer arithmetics.
+        assert(binary->left->inferred_type->kind == TYPE_DEF_POINTER);
+
+        UNIMPLEMENTED;
+
+        // LLVMValueRef lhs = llvm_build_pointer(w, binary->left);
+
+        // if (binary->right->inferred_type->kind == TYPE_DEF_NUMBER) {
+        //     lhs = LLVMBuildPtrToInt(llvm.builder, lhs, LLVMTypeOf(RHS), "");
+        //     LLVMValueRef result = LLVMBuildBinOp(llvm.builder, opcode, LHS, RHS, "");
+        //     return LLVMBuildIntToPtr(llvm.builder, result, llvm_get_type(w, binary->left->inferred_type), "");
+        // }
+            
+        // LLVMValueRef result = LLVMBuildBinOp(llvm.builder, opcode, LHS, RHS, "");
+        // return LLVMBuildIntToPtr(llvm.builder, result, llvm_get_type(w, binary->left->inferred_type), "");
     }
     default:
-        report_error(w, expr->location, "This cannot be used as an lvalue (this is an internal error).");
-        return NULL;
+        break;
     }
+    if (expr->inferred_type->kind != TYPE_DEF_POINTER) {
+        report_error(w, expr->location, "We encountered something that we tried to use as a pointer that wasn't a pointer (this is an internal errro).");
+    }
+    return llvm_build_expression(w, expr);
+}
+
+// Accepts a pointer to a struct and packs it into an allocated i64 array.
+LLVMValueRef llvm_pack_struct_into_i64_array(LLVMBuilderRef builder, LLVMValueRef function, LLVMTargetDataRef target_data, LLVMValueRef struct_value)
+{
+    LLVMBasicBlockRef entry_block = LLVMGetLastBasicBlock(function);
+    
+    LLVMTypeRef struct_type = LLVMTypeOf(struct_value);
+    size_t struct_size = LLVMABISizeOfType(target_data, struct_type);
+    size_t num_i64s = (struct_size + 7) / 8;
+
+    // Allocate memory for the array of i64s.
+    LLVMValueRef packed_array = LLVMBuildArrayAlloca(builder, LLVMInt64Type(), LLVMConstInt(LLVMInt32Type(), num_i64s, 0), "packed_array");
+
+    // Cast the input struct pointer into a byte pointer.
+    LLVMTypeRef byte_ptr_type = LLVMPointerType(LLVMInt8Type(), 0);
+    LLVMValueRef byte_ptr = LLVMBuildBitCast(builder, struct_value, byte_ptr_type, "byte_ptr");
+
+    // Create the loop.
+    LLVMBasicBlockRef loop_block = LLVMAppendBasicBlock(function, "pack_loop");
+    LLVMBasicBlockRef end_block = LLVMAppendBasicBlock(function, "pack_end");
+    LLVMBuildBr(builder, loop_block); // Enter the loop.
+    LLVMPositionBuilderAtEnd(builder, loop_block);
+
+    LLVMValueRef offset_phi = LLVMBuildPhi(builder, LLVMInt64Type(), "offset_phi");
+    LLVMValueRef byte_ptr_phi = LLVMBuildPhi(builder, byte_ptr_type, "byte_ptr_phi");
+    LLVMValueRef packed_array_phi = LLVMBuildPhi(builder, LLVMPointerType(LLVMInt64Type(), 0), "packed_array_phi");
+
+    // Load a byte from the struct and OR it with the current value in the packed array.
+    LLVMValueRef byte = LLVMBuildLoad2(builder, LLVMInt8Type(), byte_ptr_phi, "byte");
+    // LLVMValueRef index = LLVMBuildUDiv(builder, offset_phi, LLVMConstInt(LLVMInt64Type(), 8, 0), "index");
+    LLVMValueRef current = LLVMBuildLoad2(builder, LLVMInt64Type(), packed_array_phi, "current");
+    LLVMValueRef shift = LLVMBuildShl(builder, LLVMBuildZExt(builder, byte, LLVMInt64Type(), "zext"), offset_phi, "shift");
+    LLVMValueRef packed_value = LLVMBuildOr(builder, current, shift, "packed_value");
+    LLVMBuildStore(builder, packed_value, packed_array_phi);
+
+    // Increment the byte pointer and offset.
+    LLVMValueRef indices = LLVMConstInt(LLVMInt32Type(), 1, 0);
+    LLVMValueRef byte_ptr_inc = LLVMBuildGEP2(builder, LLVMInt8Type(), byte_ptr_phi, &indices, 1, "byte_ptr_inc");
+    LLVMValueRef offset_inc = LLVMBuildAdd(builder, offset_phi, LLVMConstInt(LLVMInt64Type(), 8, 0), "offset_inc");
+
+    // Check if we are done.
+    LLVMValueRef offset_cmp = LLVMBuildICmp(builder, LLVMIntEQ, offset_inc, LLVMConstInt(LLVMInt64Type(), struct_size, 0), "offset_cmp");
+    LLVMBuildCondBr(builder, offset_cmp, end_block, loop_block);
+
+    // Add the loop variables to the phi nodes.
+    LLVMAddIncoming(offset_phi, &offset_inc, &loop_block, 1);
+    LLVMAddIncoming(byte_ptr_phi, &byte_ptr_inc, &loop_block, 1);
+    LLVMAddIncoming(packed_array_phi, &packed_array, &loop_block, 1);
+
+    LLVMValueRef offset_init = LLVMConstInt(LLVMInt64Type(), 0, 0);
+    LLVMAddIncoming(offset_phi, &offset_init, &entry_block, 1);
+    LLVMAddIncoming(byte_ptr_phi, &byte_ptr, &entry_block, 1);
+    LLVMAddIncoming(packed_array_phi, &packed_array, &entry_block, 1);
+
+    LLVMPositionBuilderAtEnd(builder, end_block);
+
+    return packed_array;
 }
 
 LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
@@ -337,10 +477,11 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
         // Because during typechecking we assured that the variable's initialization came before us, this is safe.
         assert(ident->resolved_declaration->llvm_value);
 
-        if (ident->resolved_declaration->flags & DECLARATION_IS_LAMBDA_ARGUMENT) {
-            return ident->resolved_declaration->llvm_value;
-        }
-            
+        // If you use an array by-value you get a pointer.
+        // if (ident->resolved_declaration->my_type->kind == TYPE_DEF_ARRAY && ident->resolved_declaration->my_type->array.kind == ARRAY_KIND_FIXED) {
+        //     return ident->resolved_declaration->llvm_value;
+        // }
+
         return LLVMBuildLoad2(
             llvm.builder,
             llvm_get_type(w, ident->_expression.inferred_type),
@@ -350,31 +491,55 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
     case AST_UNARY_OPERATOR: {
         const Ast_Unary_Operator *unary = xx expr;
 
-        if (unary->operator_type == '*') {
-            return llvm_build_lvalue(w, unary->subexpression);
-        }       
-
-        if (unary->operator_type == '!') {
+        switch (unary->operator_type) {
+        case '!': {
             LLVMValueRef value = llvm_build_expression(w, unary->subexpression);
             if (!value) return NULL;
             return LLVMBuildNot(llvm.builder, value, "");
         }
+        case '*':
+            return llvm_build_pointer(w, unary->subexpression);
+        case TOKEN_POINTER_DEREFERENCE: {
+            LLVMTypeRef type = llvm_get_type(w, expr->inferred_type);
+            LLVMValueRef pointer = llvm_build_expression(w, unary->subexpression);
+            if (!pointer) return NULL;
 
-        UNIMPLEMENTED;
+            // @Speed: This is all just for debugging.
+            String_View pointer_name;
+            pointer_name.data = LLVMGetValueName2(pointer, &pointer_name.count);
+            char *name = tprint(SV_Fmt".deref", SV_Arg(pointer_name));
+                
+            return LLVMBuildLoad2(llvm.builder, type, pointer, name);
+        }
+        default:
+            UNIMPLEMENTED;
+        }
     }
     case AST_BINARY_OPERATOR: {
         const Ast_Binary_Operator *binary = xx expr;
+
+        if (binary->operator_type == TOKEN_ARRAY_SUBSCRIPT) {
+            return LLVMBuildLoad2(llvm.builder, llvm_get_type(w, expr->inferred_type), llvm_build_pointer(w, expr), "");
+        }
+
         LLVMValueRef LHS = llvm_build_expression(w, binary->left);
         LLVMValueRef RHS = llvm_build_expression(w, binary->right);
+
         LLVMIntPredicate int_predicate;
         LLVMRealPredicate real_predicate;
         LLVMOpcode opcode = llvm_get_opcode(binary->operator_type, binary->left->inferred_type, &int_predicate, &real_predicate);
-        if (opcode == LLVMICmp) {
-            return LLVMBuildICmp(llvm.builder, int_predicate, LHS, RHS, "");
+
+        // Comparison operators.
+        if (opcode == LLVMICmp) return LLVMBuildICmp(llvm.builder, int_predicate, LHS, RHS, "");
+        if (opcode == LLVMFCmp) return LLVMBuildFCmp(llvm.builder, real_predicate, LHS, RHS, "");
+
+        // @Hack for pointer arithmetic in LLVM.
+        if (binary->left->inferred_type->kind == TYPE_DEF_POINTER && binary->right->inferred_type->kind == TYPE_DEF_NUMBER) {
+            LHS = LLVMBuildPtrToInt(llvm.builder, LHS, LLVMTypeOf(RHS), "");
+            LLVMValueRef result = LLVMBuildBinOp(llvm.builder, opcode, LHS, RHS, "");
+            return LLVMBuildIntToPtr(llvm.builder, result, llvm_get_type(w, binary->left->inferred_type), "");
         }
-        if (opcode == LLVMFCmp) {
-            return LLVMBuildFCmp(llvm.builder, real_predicate, LHS, RHS, "");
-        }
+            
         return LLVMBuildBinOp(llvm.builder, opcode, LHS, RHS, "");
     }
     case AST_LAMBDA: {
@@ -387,11 +552,14 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
         const Ast_Procedure_Call *call = xx expr;
         LLVMValueRef procedure = llvm_build_expression(w, call->procedure_expression);
         LLVMTypeRef procedure_type = llvm_get_type(w, call->procedure_expression->inferred_type);
+
         size_t args_count = arrlenu(call->arguments);
         LLVMValueRef *args = arena_alloc(&temporary_arena, sizeof(LLVMValueRef) * args_count);
+
         For (call->arguments) {
             args[it] = llvm_build_expression(w, call->arguments[it]);
         }
+
         return LLVMBuildCall2(llvm.builder, procedure_type, procedure, args, args_count, "");
     }
     case AST_TYPE_DEFINITION:
@@ -423,7 +591,7 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
             
         if (selector->struct_field_index >= 0) {
             LLVMTypeRef field_type = llvm_get_type(w, selector->_expression.inferred_type);
-            LLVMValueRef field_pointer = llvm_build_lvalue(w, expr);
+            LLVMValueRef field_pointer = llvm_build_pointer(w, expr);
             return LLVMBuildLoad2(llvm.builder, field_type, field_pointer, "");
         }
 
@@ -432,15 +600,16 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
     case AST_TYPE_INSTANTIATION: {
         const Ast_Type_Instantiation *inst = xx expr;
 
-        assert(!(inst->type_definition->kind == TYPE_DEF_LITERAL)); // Typechecking should replace this.
+        assert(inst->type_definition->kind != TYPE_DEF_LITERAL); // Typechecking should replace this.
 
         size_t n = arrlenu(inst->arguments);
 
         LLVMValueRef *values = arena_alloc(&temporary_arena, n * sizeof(LLVMValueRef));
         For (inst->arguments) {
+            // printf(">> %s\n", expr_to_string(inst->arguments[it]));
             values[it] = llvm_build_expression(w, inst->arguments[it]);
         }
-        return LLVMConstStructInContext(llvm.context, values, n, 1);
+        return LLVMConstStructInContext(llvm.context, values, n, USE_STRUCT_PACKING);
 
         // LLVMTypeRef struct_type = llvm_get_type(w, inst->type_definition);
         // LLVMValueRef struct_pointer = lvalue;
@@ -474,22 +643,23 @@ void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *st
         break;
     }
     case AST_WHILE: {
+        const Ast_While *while_stmt = xx stmt;
+            
         LLVMBasicBlockRef basic_block_loop = LLVMAppendBasicBlock(function, "loop");
         LLVMBuildBr(llvm.builder, basic_block_loop); // Implicit break from current block to the loop.
         LLVMPositionBuilderAtEnd(llvm.builder, basic_block_loop);
 
-        const Ast_While *while_stmt = xx stmt;
-        LLVMValueRef condition = llvm_build_expression(w, while_stmt->condition_expression);
-            
         LLVMBasicBlockRef basic_block_then = LLVMAppendBasicBlock(function, "then");
         LLVMBasicBlockRef basic_block_merge = LLVMAppendBasicBlock(function, "merge");
 
+        LLVMValueRef condition = llvm_build_expression(w, while_stmt->condition_expression);
         LLVMBuildCondBr(llvm.builder, condition, basic_block_then, basic_block_merge);
 
         // Emit the "then" statement.
         LLVMPositionBuilderAtEnd(llvm.builder, basic_block_then);
         llvm_build_statement(w, function, while_stmt->then_statement);
-        LLVMBuildCondBr(llvm.builder, condition, basic_block_loop, basic_block_merge);
+        LLVMBuildBr(llvm.builder, basic_block_loop);
+        // LLVMBuildCondBr(llvm.builder, condition, basic_block_loop, basic_block_merge);
             
         // Emit code for the merge block.
         LLVMPositionBuilderAtEnd(llvm.builder, basic_block_merge);
@@ -548,30 +718,23 @@ void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *st
         Ast_Variable *var = xx stmt;
         const char *name = var->declaration->ident->name.data;
 
+        LLVMValueRef alloca = LLVMBuildAlloca(llvm.builder, llvm_get_type(w, var->declaration->my_type), name);
+        var->declaration->llvm_value = alloca;
+       
         if (var->declaration->flags & DECLARATION_IS_LAMBDA_ARGUMENT) {
-            var->declaration->llvm_value = LLVMGetParam(function, var->lambda_argument_index);
-            LLVMSetValueName2(var->declaration->llvm_value, name, var->declaration->ident->name.count);
+            LLVMBuildStore(llvm.builder, LLVMGetParam(function, var->lambda_argument_index), alloca);
             break;
         }
 
-        LLVMTypeRef type = llvm_get_type(w, var->declaration->my_type);
-
-        // @Cleanup
-        if (var->declaration->my_type->kind == TYPE_DEF_LAMBDA) {
-            type = LLVMPointerType(type, 0);
-        }
-
-        LLVMValueRef alloca = LLVMBuildAlloca(llvm.builder, type, name);
         LLVMValueRef initializer = llvm_build_expression(w, var->declaration->root_expression);
         LLVMBuildStore(llvm.builder, initializer, alloca);
-        var->declaration->llvm_value = alloca;
         break;
     }
     case AST_ASSIGNMENT: {
         Ast_Assignment *assign = xx stmt;
         Ast_Type_Definition *defn = assign->pointer->inferred_type;
 
-        LLVMValueRef pointer = llvm_build_lvalue(w, assign->pointer);
+        LLVMValueRef pointer = llvm_build_pointer(w, assign->pointer);
         LLVMValueRef value = llvm_build_expression(w, assign->value);
 
         if (assign->operator_type == '=') {

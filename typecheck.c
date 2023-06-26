@@ -1,6 +1,5 @@
 #include <stdarg.h>
 #include <math.h>
-#include <limits.h>
 
 #include "typecheck.h"
 #include "workspace.h"
@@ -23,6 +22,16 @@ static bool expression_is_lvalue(Ast_Expression *expr)
     if (expr->kind == AST_SELECTOR) {
         Ast_Selector *selector = xx expr;
         return expression_is_lvalue(selector->namespace_expression);
+    }
+    if (expr->kind == AST_UNARY_OPERATOR) {
+        Ast_Unary_Operator *unary = xx expr;
+        if (unary->operator_type != TOKEN_POINTER_DEREFERENCE) return false;
+        return expression_is_lvalue(unary->subexpression);
+    }
+    if (expr->kind == AST_BINARY_OPERATOR) {
+        Ast_Binary_Operator *binary = xx expr;
+        if (binary->operator_type != TOKEN_ARRAY_SUBSCRIPT) return false; // What about pointer arithmetic?
+        return expression_is_lvalue(binary->left);
     }
     return false;
 }
@@ -262,7 +271,7 @@ Ast_Expression *autocast_to_bool(Workspace *w, Ast_Expression *expr)
         return xx binary;
     }
     case TYPE_DEF_ARRAY: {
-        if (defn->array.length == -1 || defn->array.length == LLONG_MIN) {
+        if (defn->array.kind != ARRAY_KIND_FIXED) {
             Ast_Selector *selector = context_alloc(sizeof(*selector));
             selector->_expression.kind = AST_SELECTOR;
             selector->_expression.location = expr->location;
@@ -434,16 +443,15 @@ void typecheck_identifier(Workspace *w, Ast_Ident *ident)
 void typecheck_unary_operator(Workspace *w, Ast_Unary_Operator *unary)
 {
     Replace(unary->subexpression);
-    
-    if (unary->operator_type == '*') {
+
+    switch (unary->operator_type) {
+    case '*':
         if (!expression_is_lvalue(unary->subexpression)) {
             report_error(w, unary->_expression.location, "Can only take a pointer to an lvalue."); // TODO: This error mesage.
         }
         unary->_expression.inferred_type = make_pointer_type(unary->subexpression->inferred_type);
-        return;
-    }
-
-    if (unary->operator_type == '!') {
+        break;
+    case '!': {   
         Ast_Expression *expr = autocast_to_bool(w, unary->subexpression);
         if (expr) {
             unary->subexpression = expr;
@@ -452,10 +460,18 @@ void typecheck_unary_operator(Workspace *w, Ast_Unary_Operator *unary)
                 type_to_string(unary->subexpression->inferred_type));
         }
         unary->_expression.inferred_type = w->type_def_bool;
-        return;
+        break;
     }
-    
-    UNIMPLEMENTED;
+    case TOKEN_POINTER_DEREFERENCE:
+        if (unary->subexpression->inferred_type->kind != TYPE_DEF_POINTER) {
+            report_error(w, unary->_expression.location, "Attempt to dereference a non-pointer (got type %s).",
+                type_to_string(unary->subexpression->inferred_type));
+        }
+        unary->_expression.inferred_type = unary->subexpression->inferred_type->pointer_to;
+        break;
+    default:
+        UNIMPLEMENTED;
+    }   
 }
 
 inline Ast_Literal *make_literal(Literal_Kind kind)
@@ -605,6 +621,8 @@ void typecheck_binary_comparison(Workspace *w, char operator_type, Source_Locati
 
     Ast_Type_Definition *defn = left->inferred_type; // Now they are the same.
 
+    if (defn->kind == TYPE_DEF_POINTER) return;
+
     if (defn->kind != TYPE_DEF_NUMBER) {
         report_error(w, site, "Type mismatch: Operator '%s' does not work on non-number types (got %s).",
             token_type_to_string(operator_type), type_to_string(defn));
@@ -713,7 +731,16 @@ void typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary)
     }
         
     case TOKEN_ARRAY_SUBSCRIPT:
-        UNIMPLEMENTED;
+        if (binary->left->inferred_type->kind != TYPE_DEF_ARRAY) {
+            report_error(w, binary->left->location, "Type mismatch: Wanted an array but got %s.",
+                type_to_string(binary->left->inferred_type));
+        }
+        if (binary->right->inferred_type->kind != TYPE_DEF_NUMBER && (binary->right->inferred_type->number.flags & NUMBER_FLAGS_FLOAT)) {
+            report_error(w, binary->left->location, "Type mismatch: Wanted an integer but got %s.",
+                type_to_string(binary->right->inferred_type));
+        }
+        binary->_expression.inferred_type = binary->left->inferred_type->array.element_type;
+        break;
     }
 }
 
@@ -749,6 +776,7 @@ void typecheck_procedure_call(Workspace *w, Ast_Procedure_Call *call)
             report_error(w, call->arguments[i]->location, "Argument type mismatch: Wanted %s but got %s.",
                 type_to_string(proc->lambda.argument_types[i]), type_to_string(call->arguments[i]->inferred_type));
         }
+        Replace(call->arguments[i]);
         
         // if (!types_are_equal(call->arguments[i]->inferred_type, proc->lambda.argument_types[i])) {
         // }
@@ -768,6 +796,10 @@ inline void typecheck_definition(Workspace *w, Ast_Type_Definition *defn)
                 assert(member->my_type);
                 arrput(defn->struct_desc->field_types, member->my_type);
             }
+        }
+        defn->size = 0;
+        For (defn->struct_desc->field_types) {
+            defn->size += defn->struct_desc->field_types[it]->size;
         }
     }
 
@@ -810,9 +842,7 @@ void typecheck_selector_on_string(Workspace *w, Ast_Selector *selector)
 
 void typecheck_selector_on_array(Workspace *w, Ast_Selector *selector, Ast_Type_Definition *defn)
 {
-    bool slice = defn->array.length == -1;
-    bool dynamic = defn->array.length == LLONG_MIN;
-    if (slice || dynamic) {
+    if (defn->array.kind != ARRAY_KIND_FIXED) {
         if (sv_eq(selector->ident->name, sv_from_cstr("data"))) {
             selector->struct_field_index = 0;
             selector->_expression.inferred_type = make_pointer_type(defn->array.element_type);
@@ -825,7 +855,7 @@ void typecheck_selector_on_array(Workspace *w, Ast_Selector *selector, Ast_Type_
             return;
         }
         
-        if (dynamic && sv_eq(selector->ident->name, sv_from_cstr("capacity"))) {
+        if (defn->array.kind == ARRAY_KIND_DYNAMIC && sv_eq(selector->ident->name, sv_from_cstr("capacity"))) {
             selector->struct_field_index = 1;
             selector->_expression.inferred_type = w->type_def_int;
             return;
@@ -860,20 +890,10 @@ void typecheck_selector(Workspace *w, Ast_Selector *selector)
     Ast_Type_Definition *defn = selector->namespace_expression->inferred_type;
     Replace_Type(defn);
 
-    // Our syntax for pointer dereference is currently `pointer.*` so we use a selector.
-    if (selector->is_pointer_dereference) {
-        if (!defn->pointer_to) {
-            report_error(w, site, "Attempt to dereference a non-pointer (got type %s).",
-                type_to_string(defn));
-        }
-        selector->_expression.inferred_type = defn->pointer_to;
-        return;
-    }
-
     // Since we may be waiting for this declaration, we will try to be typechecked multiple times.
     // We cache the resolved_declaration for that reason.
-    if (selector->resolved_declaration) {
-        Ast_Declaration *decl = selector->resolved_declaration;
+    if (selector->ident->resolved_declaration) {
+        Ast_Declaration *decl = selector->ident->resolved_declaration;
 
         if (!(decl->flags & DECLARATION_HAS_BEEN_TYPECHECKED)) return;
 
@@ -901,7 +921,7 @@ void typecheck_selector(Workspace *w, Ast_Selector *selector)
             }
 
             // Cache this in case we can't proceed and need to return here later.
-            selector->resolved_declaration = decl;
+            selector->ident->resolved_declaration = decl;
 
             if (!(decl->flags & DECLARATION_HAS_BEEN_TYPECHECKED)) return;
 
@@ -934,7 +954,7 @@ void typecheck_selector(Workspace *w, Ast_Selector *selector)
         }
 
         // Cache this in case we can't proceed and need to return here later.
-        selector->resolved_declaration = decl;
+        selector->ident->resolved_declaration = decl;
 
         if (!(decl->flags & DECLARATION_HAS_BEEN_TYPECHECKED)) return;
 
@@ -954,7 +974,7 @@ void typecheck_selector(Workspace *w, Ast_Selector *selector)
         }
 
         // Cache this in case we can't proceed and need to return here later.
-        selector->resolved_declaration = decl;
+        selector->ident->resolved_declaration = decl;
 
         if (!(decl->flags & DECLARATION_HAS_BEEN_TYPECHECKED)) return;
 
@@ -1033,17 +1053,62 @@ void typecheck_instantiation(Workspace *w, Ast_Type_Instantiation *inst)
     }
     case TYPE_DEF_ARRAY: {
         int n = arrlen(inst->arguments);
-        int m = defn->array.length;
-        if (n != m) {
-            report_error(w, site, "Incorrect number of arguments for array literal (wanted %d but got %d).", m, n);
-        }
-        for (int i = 0; i < n; ++i) {
-            Ast_Type_Definition *arg = inst->arguments[i]->inferred_type;
-            if (!types_are_equal(arg, defn->array.element_type)) {
-                report_error(w, inst->arguments[i]->location, "Argument type mismatch: Wanted %s but got %s.",
-                    type_to_string(defn->array.element_type), type_to_string(arg));
+            
+        switch (defn->array.kind) {
+        case ARRAY_KIND_FIXED: {
+            int m = defn->array.length;
+            if (n != m) {
+                report_error(w, site, "Incorrect number of arguments for array literal (wanted %d but got %d).", m, n);
             }
+            for (int i = 0; i < n; ++i) {
+                Ast_Expression *arg = inst->arguments[i];
+                if (!check_that_types_match(w, arg, defn->array.element_type)) {
+                    report_error(w, arg->location, "Argument type mismatch: Wanted %s but got %s.",
+                        type_to_string(defn->array.element_type), type_to_string(arg->inferred_type));
+                }
+            }
+            break;
         }
+        case ARRAY_KIND_SLICE: {
+            if (n != 2) {
+                report_error(w, site, "Incorrect number of arguments for slice literal (wanted 2 but got %d.)", n);
+            }
+            Ast_Type_Definition *data_field = context_alloc(sizeof(*data_field));
+            data_field->kind = TYPE_DEF_POINTER;
+            data_field->pointer_to = defn->array.element_type;
+            if (!check_that_types_match(w, inst->arguments[0], data_field)) {
+                report_error(w, inst->arguments[0]->location, "Field type mismatch: Wanted %s but got %s.",
+                    type_to_string(data_field), type_to_string(inst->arguments[0]->inferred_type));
+            }
+            if (!check_that_types_match(w, inst->arguments[1], w->type_def_int)) {
+                report_error(w, inst->arguments[1]->location, "Field type mismatch: Wanted int but got %s.",
+                    type_to_string(inst->arguments[1]->inferred_type));
+            }
+            break;
+        }
+        case ARRAY_KIND_DYNAMIC: {
+            if (n != 3) {
+                report_error(w, site, "Incorrect number of arguments for dynamic array literal (wanted 3 but got %d.)", n);
+            }
+            Ast_Type_Definition *data_field = context_alloc(sizeof(*data_field));
+            data_field->kind = TYPE_DEF_POINTER;
+            data_field->pointer_to = defn->array.element_type;
+            if (!check_that_types_match(w, inst->arguments[0], data_field)) {
+                report_error(w, inst->arguments[0]->location, "Field type mismatch: Wanted %s but got %s.",
+                    type_to_string(inst->arguments[0]->inferred_type));
+            }
+            if (!check_that_types_match(w, inst->arguments[1], w->type_def_int)) {
+                report_error(w, inst->arguments[1]->location, "Field type mismatch: Wanted int but got %s.",
+                    type_to_string(inst->arguments[1]->inferred_type));
+            }
+            if (!check_that_types_match(w, inst->arguments[2], w->type_def_int)) {
+                report_error(w, inst->arguments[2]->location, "Field type mismatch: Wanted int but got %s.",
+                    type_to_string(inst->arguments[2]->inferred_type));
+            }
+            break;
+        }
+        }
+            
         break;
     }
     case TYPE_DEF_STRUCT: {
@@ -1150,6 +1215,9 @@ inline void typecheck_variable(Workspace *w, Ast_Variable *var)
 
 void typecheck_assignment(Workspace *w, Ast_Assignment *assign)
 {
+    Replace(assign->pointer);
+    Replace(assign->value);
+    
     if (assign->pointer->kind == AST_IDENT) {
         Ast_Ident *ident = xx assign->pointer;
         if (ident->resolved_declaration->flags & DECLARATION_IS_CONSTANT) {
@@ -1159,12 +1227,24 @@ void typecheck_assignment(Workspace *w, Ast_Assignment *assign)
         goto end;
     }
 
-    // Here we must be assigning to a selector, and we must not be constant
+    // Here we must be assigning to a selector or a pointer, and we must not be constant
     // otherwise we *should* have been replaced in typecheck_selector.
 
-    assert(assign->pointer->kind == AST_SELECTOR);
+    Ast_Type_Definition *defn = assign->pointer->inferred_type;
 
+    if (assign->pointer->kind != AST_SELECTOR && defn->kind != TYPE_DEF_POINTER) {
+        if (assign->pointer->kind == AST_BINARY_OPERATOR && ((Ast_Binary_Operator *)(assign->pointer))->operator_type == TOKEN_ARRAY_SUBSCRIPT) {
+            goto end;
+        }
+        report_error(w, assign->pointer->location, "Cannot assign to non-lvalue.");
+    }
+    
 end:
+    if (assign->operator_type != '=') {
+        typecheck_binary_arithmetic(w, assign->operator_type, assign->pointer->location, assign->pointer, assign->value);
+        return;
+    }
+    
     if (!check_that_types_match(w, assign->value, assign->pointer->inferred_type)) {
         report_error(w, assign->value->location, "Type mismatch: Wanted %s but got %s.",
             type_to_string(assign->pointer->inferred_type), type_to_string(assign->value->inferred_type));
@@ -1394,6 +1474,57 @@ bool check_that_types_match(Workspace *w, Ast_Expression *expr, Ast_Type_Definit
         }
     }
 
+    // Fixed-sized arrays can autocast to pointer & slice.
+    if (expr->inferred_type->kind == TYPE_DEF_ARRAY && expr->inferred_type->array.kind == ARRAY_KIND_FIXED) {
+        // if (type->kind == TYPE_DEF_POINTER) return types_are_equal(expr->inferred_type->array.element_type, type->pointer_to);
+
+        if (type->kind == TYPE_DEF_ARRAY && type->array.kind == ARRAY_KIND_SLICE) {
+            Ast_Type_Instantiation *inst = context_alloc(sizeof(*inst));
+            inst->_expression.kind = AST_TYPE_INSTANTIATION;
+            inst->_expression.location = expr->location;
+            inst->_expression.inferred_type = type;
+            inst->type_definition = type;
+
+            {
+                Ast_Number *index = make_number(0);
+                index->_expression.location = expr->location;
+                index->_expression.inferred_type = w->type_def_int;
+
+                Ast_Binary_Operator *subscript = context_alloc(sizeof(*subscript));
+                subscript->_expression.kind = AST_BINARY_OPERATOR;
+                subscript->_expression.location = expr->location;
+                subscript->_expression.inferred_type = expr->inferred_type->array.element_type;
+                subscript->left = expr;
+                subscript->operator_type = TOKEN_ARRAY_SUBSCRIPT;
+                subscript->right = xx index;
+
+                Ast_Type_Definition *pointer_type = context_alloc(sizeof(*pointer_type));
+                pointer_type->_expression.kind = AST_TYPE_DEFINITION;
+                pointer_type->_expression.location = expr->location;
+                pointer_type->_expression.inferred_type = w->type_def_type;
+                pointer_type->kind = TYPE_DEF_POINTER;
+                pointer_type->pointer_to = expr->inferred_type->array.element_type;
+
+                Ast_Unary_Operator *unary = context_alloc(sizeof(*unary));
+                unary->_expression.kind = AST_UNARY_OPERATOR;
+                unary->_expression.location = expr->location;
+                unary->_expression.inferred_type = pointer_type;
+                unary->operator_type = '*';
+                unary->subexpression = xx subscript;
+
+                arrput(inst->arguments, xx unary);
+            }
+
+            Ast_Number *number = make_number(expr->inferred_type->array.length);
+            number->_expression.inferred_type = w->type_def_int;
+            arrput(inst->arguments, xx number);
+
+            // TODO: Wow, this line is the problem.
+            expr->replacement = xx inst;
+            return true;
+        }
+    }
+
     return false;
 }
 
@@ -1449,16 +1580,6 @@ void report_error(Workspace *workspace, Source_Location loc, const char *format,
     vfprintf(stderr, format, args);
     fprintf(stderr, "\n\n");
 
-    // TODO: I want to "normalize" the indentation.
-    // When we add lines to the parser, we can add it
-    // after it has been trimmed to remove leading spaces.
-    // However, when printing the previous line, if they differ
-    // in indentation I want to show that somehow.
-    // Basically, if we are like 10 scopes deep in a function,
-    // I want to only print indentation 1 level deeper or shallower
-    // than the current line, so that when printing diagnostics we
-    // don't end up printing like 50 spaces.
-
     int ln = loc.l0;
 
     // Display the previous line if it exists.
@@ -1498,3 +1619,58 @@ void report_error(Workspace *workspace, Source_Location loc, const char *format,
     va_end(args);
     exit(1);
 }
+
+void report_info(Workspace *workspace, Source_Location loc, const char *format, ...)
+{
+    va_list args;
+    va_start(args, format);
+
+    if (loc.l1 < 0) loc.l1 = loc.l0;
+    if (loc.c1 < 0) loc.c1 = loc.c0;
+
+    Source_File file = workspace->files[loc.fid];
+
+    // Display the error message.
+    fprintf(stderr, Loc_Fmt": Info: ", SV_Arg(file.path), Loc_Arg(loc));
+    vfprintf(stderr, format, args);
+    fprintf(stderr, "\n\n");
+
+    int ln = loc.l0;
+
+    // Display the previous line if it exists.
+    String_View prev = (ln > 0) ? file.lines[ln-1] : SV_NULL;
+    String_View line = file.lines[ln];
+
+    if (prev.count > 1) {
+        size_t count = Min(size_t, prev.count, line.count);
+        size_t n = 0;
+        while (n < count && prev.data[n] == line.data[n] && isspace(prev.data[n])) {
+            n += 1;
+        }
+        sv_chop_left(&prev, n);
+        sv_chop_left(&line, n);
+
+        fprintf(stderr, TAB CYN SV_Fmt RESET, SV_Arg(prev));
+
+        loc.c0 -= n;
+        loc.c1 -= n;
+    } else {
+        size_t n = 0;
+        while (n < line.count && isspace(line.data[n])) {
+            n += 1;
+        }
+        sv_chop_left(&line, n);
+        loc.c0 -= n;
+        loc.c1 -= n;
+    }
+
+    // Highlight the token in red.
+
+    fprintf(stderr, TAB CYN SV_Fmt, loc.c0, line.data);
+    fprintf(stderr,     RED SV_Fmt, loc.c1 - loc.c0, line.data + loc.c0);
+    fprintf(stderr,     CYN SV_Fmt, (int)line.count - loc.c1, line.data + loc.c1);
+    fprintf(stderr, "\n" RESET);
+
+    va_end(args);
+}
+

@@ -2,7 +2,6 @@
 #include <errno.h>
 #include <string.h> // strerror
 #include <stdio.h> // os_read_entire_file
-#include <limits.h> // LLONG_MIN for defn->array.length
 
 #include "common.h"
 #include "parser.h"
@@ -40,7 +39,7 @@ static inline Ast_Declaration *make_declaration(Parser *p, Source_Location loc)
     return decl;
 }
 
-static inline Ast_Type_Definition *make_type_definition(Parser *p, Source_Location loc, Ast_Type_Kind kind)
+static inline Ast_Type_Definition *make_type_definition(Parser *p, Source_Location loc, Type_Def_Kind kind)
 {
     Ast_Type_Definition *defn = ast_alloc(p, loc, AST_TYPE_DEFINITION, sizeof(*defn));
     defn->kind = kind;
@@ -228,10 +227,10 @@ Ast_Expression *parse_primary_expression(Parser *p, Ast_Expression *base)
 
             switch (token.type) {
             case '*': {
-                Ast_Selector *selector = ast_alloc(p, token.location, AST_SELECTOR, sizeof(*selector));
-                selector->namespace_expression = base;
-                selector->is_pointer_dereference = true;
-                base = xx selector;
+                Ast_Unary_Operator *unary = ast_alloc(p, token.location, AST_UNARY_OPERATOR, sizeof(*unary));
+                unary->subexpression = base;
+                unary->operator_type = TOKEN_POINTER_DEREFERENCE;
+                base = xx unary;
                 break;
             }
             case '{': {
@@ -254,6 +253,7 @@ Ast_Expression *parse_primary_expression(Parser *p, Ast_Expression *base)
                 Ast_Selector *selector = ast_alloc(p, token.location, AST_SELECTOR, sizeof(*selector));
                 selector->namespace_expression = base;
                 selector->ident = make_identifier(p, token);
+                selector->struct_field_index = -1;
                 base = xx selector;
                 break;
             }
@@ -264,8 +264,16 @@ Ast_Expression *parse_primary_expression(Parser *p, Ast_Expression *base)
             
             break;
         }
-        case '[': // TODO: array subscript
-            UNIMPLEMENTED;
+        case '[': {
+            eat_next_token(p);
+            Ast_Binary_Operator *binary = ast_alloc(p, token.location, AST_BINARY_OPERATOR, sizeof(*binary));
+            binary->left = base;
+            binary->operator_type = TOKEN_ARRAY_SUBSCRIPT;
+            binary->right = parse_expression(p);
+            base = xx binary;
+            eat_token_type(p, ']', "Missing closing bracket after array subscript.");
+            break;
+        }
         case '(': {
             eat_next_token(p);
             Ast_Procedure_Call *call = ast_alloc(p, base->location, AST_PROCEDURE_CALL, sizeof(*call));
@@ -374,7 +382,6 @@ Ast_Expression *parse_base_expression(Parser *p)
         return xx parse_enum_defn(p);
 
     case '(': {
-        // nocheckin: remove because parse_declaration_value handles it now.
         token = peek_token(p, 1);
         switch (token.type) {
         case TOKEN_IDENT:
@@ -399,6 +406,8 @@ Ast_Expression *parse_base_expression(Parser *p)
     case '.':
         // TODO: anonymous member access
         UNIMPLEMENTED;
+
+    case '[': return xx parse_type_definition(p, NULL);
     }
 
     if (!p->reported_error) parser_report_error(p, token.location, "Expected a base expression (operand) but got %s.", token_type_to_string(token.type));
@@ -778,7 +787,7 @@ Ast_Type_Definition *parse_type_definition(Parser *parser, Ast_Expression *type_
         switch (token.type) {
         case ']':
             eat_next_token(parser); // ]
-            defn->array.length = -1;
+            defn->array.kind = ARRAY_KIND_SLICE;
             defn->array.element_type = parse_type_definition(parser, NULL);
             return defn;
         case TOKEN_NUMBER:
@@ -788,12 +797,13 @@ Ast_Type_Definition *parse_type_definition(Parser *parser, Ast_Expression *type_
             }
             eat_token_type(parser, ']', "Missing closing bracket after array length.");
             defn->array.length = token.integer_value;
+            defn->array.kind = ARRAY_KIND_FIXED;
             defn->array.element_type = parse_type_definition(parser, NULL);
             return defn;
         case TOKEN_DOUBLE_DOT:
             eat_next_token(parser); // ..
             eat_token_type(parser, ']', "Missing closing bracket after array length.");
-            defn->array.length = LLONG_MIN;
+            defn->array.kind = ARRAY_KIND_DYNAMIC;
             defn->array.element_type = parse_type_definition(parser, NULL);
             return defn;
         default:
@@ -1008,8 +1018,7 @@ Ast_Statement *parse_statement(Parser *p)
         return xx parse_block(p);
 
     case TOKEN_IDENT:
-        token = peek_token(p, 1);
-        if (token.type == ':') {
+        if (peek_token(p, 1).type == ':') {
             Ast_Declaration *decl = parse_declaration(p);
 
             // Check for variable declaration.
@@ -1030,32 +1039,29 @@ Ast_Statement *parse_statement(Parser *p)
                 
             return NULL;
         }
-
-        // Parse assignment.
-        Ast_Expression *expr = parse_expression(p);
-        if (!expr) return NULL;
-        token = peek_next_token(p);
-        switch (token.type) {
-        case '=':
-        case TOKEN_PLUSEQUALS:
-        case TOKEN_MINUSEQUALS:
-        case TOKEN_TIMESEQUALS:
-        case TOKEN_DIVEQUALS:
-        case TOKEN_MODEQUALS:
-            return parse_assignment(p, expr);
-        default: {
-            Ast_Expression_Statement *stmt = ast_alloc(p, expr->location, AST_EXPRESSION_STATEMENT, sizeof(*stmt));
-            stmt->subexpression = expr;
-            return xx stmt;
-        }
-        }
+        break;
     }
 
     Ast_Expression *expr = parse_expression(p);
     if (!expr) return NULL;
-    Ast_Expression_Statement *stmt = ast_alloc(p, expr->location, AST_EXPRESSION_STATEMENT, sizeof(*stmt));
-    stmt->subexpression = expr;
-    return xx stmt;
+    token = peek_next_token(p);
+    switch (token.type) {
+    case '=':
+    case TOKEN_PLUSEQUALS:
+    case TOKEN_MINUSEQUALS:
+    case TOKEN_TIMESEQUALS:
+    case TOKEN_DIVEQUALS:
+    case TOKEN_MODEQUALS:
+    case TOKEN_BITWISE_AND_EQUALS:
+    case TOKEN_BITWISE_OR_EQUALS:
+    case TOKEN_BITWISE_XOR_EQUALS:
+        return parse_assignment(p, expr);
+    default: {
+        Ast_Expression_Statement *stmt = ast_alloc(p, expr->location, AST_EXPRESSION_STATEMENT, sizeof(*stmt));
+        stmt->subexpression = expr;
+        return xx stmt;
+    }
+    }
 }
 
 void parse_declaration_value(Parser *p, Ast_Declaration *decl)
@@ -1435,14 +1441,13 @@ void print_expr_to_builder(String_Builder *sb, const Ast_Expression *expr, size_
         const Ast_Selector *selector = xx expr;
         print_expr_to_builder(sb, selector->namespace_expression, depth);
         sb_append_cstr(sb, ".");
-        if (selector->is_pointer_dereference) sb_append_cstr(sb, "*");
-        else  print_expr_to_builder(sb, xx selector->ident, depth);
+        print_expr_to_builder(sb, xx selector->ident, depth);
         break;
     }
     case AST_TYPE_INSTANTIATION: {
         const Ast_Type_Instantiation *inst = xx expr;
         print_type_to_builder(sb, inst->type_definition);
-        sb_append_cstr(sb, "{\n");
+        sb_append_cstr(sb, " {\n");
         depth += 1;
         For (inst->arguments) {
             for (size_t i = 0; i < depth; ++i) sb_append_cstr(sb, "    ");
@@ -1490,10 +1495,16 @@ void print_type_to_builder(String_Builder *sb, const Ast_Type_Definition *defn)
         print_type_to_builder(sb, defn->pointer_to);
         break;
     case TYPE_DEF_ARRAY:
-        if (defn->array.length < 0) {
-            sb_append_cstr(sb, "[] ");
-        } else {
+        switch (defn->array.kind) {
+        case ARRAY_KIND_FIXED:
             sb_print(sb, "[%lld] ", defn->array.length);
+            break;
+        case ARRAY_KIND_SLICE:
+            sb_append_cstr(sb, "[] ");
+            break;
+        case ARRAY_KIND_DYNAMIC:
+            sb_append_cstr(sb, "[..] ");
+            break;
         }
         print_type_to_builder(sb, defn->array.element_type);
         break;

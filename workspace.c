@@ -7,7 +7,7 @@
 
 void workspace_parse_entire_file(Workspace *w, Source_File file);
 
-static Ast_Type_Definition *make_type_definition(Workspace *w, const char *name, Ast_Type_Kind kind, int size_bytes)
+static Ast_Type_Definition *make_type_definition(Workspace *w, const char *name, Type_Def_Kind kind, int size_bytes)
 {
     Ast_Type_Definition *defn = context_alloc(sizeof(*defn));
     defn->_expression.kind = AST_TYPE_DEFINITION;
@@ -170,6 +170,18 @@ void workspace_llvm(Workspace *w)
         if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) {
             LLVMTypeRef type = llvm_get_type(w, decl->my_type); assert(type);
             LLVMValueRef function = LLVMAddFunction(w->llvm.module, "", type);
+            LLVMSetFunctionCallConv(function, LLVMCCallConv);
+
+            For (decl->my_type->lambda.argument_types) {
+                if (decl->my_type->lambda.argument_types[it]->kind == TYPE_DEF_STRUCT) {
+                    // const unsigned NoUndef = 38;
+                    // const unsigned ReadOnly = 48;
+                    // const unsigned ByVal = 72;
+                    // LLVMAttributeRef attr = LLVMCreateEnumAttribute(w->llvm.context, ReadOnly, 0);
+                    // LLVMAddAttributeAtIndex(function, it+1, attr);
+                }
+            }
+            
             decl->llvm_value = function;
         }
     }
@@ -184,18 +196,40 @@ void workspace_llvm(Workspace *w)
     }
 }
 
-void workspace_save(Workspace *w, const char *ir_path, const char *asm_path)
+String_View path_trim_ext(String_View path)
 {
-    char *error_message = NULL;
+    size_t i = 0;
+    while (i < path.count && path.data[path.count-i-1] != '.') {
+        i += 1;
+    }
+    if (path.data[path.count-i-1] == '.') i += 1;
+    return sv_from_parts(path.data, path.count - i);
+}
 
-    LLVMPrintModuleToFile(w->llvm.module, ir_path, &error_message);
+void workspace_save(Workspace *w)
+{
+    assert(arrlenu(w->files) > 0);
+
+    String_View path = path_trim_ext(w->files[0].path);
+    
+    char *llvm_path = tprint(SV_Fmt".llvm", SV_Arg(path));
+    char *obj_path = tprint(SV_Fmt".o", SV_Arg(path));
+    char *asm_path = tprint(SV_Fmt".asm", SV_Arg(path));
+
+    char *error_message = NULL;
+    LLVMPrintModuleToFile(w->llvm.module, llvm_path, &error_message);
     if (error_message) {
-        fprintf(stderr, "Error: Could not output LLVM module to file '%s': %s.\n", ir_path, error_message);
+        fprintf(stderr, "Error: Could not output LLVM module to file '%s': %s.\n", llvm_path, error_message);
         LLVMDisposeMessage(error_message);
     }
 
-    if (LLVMTargetMachineEmitToFile(w->llvm.target_machine, w->llvm.module, asm_path, LLVMObjectFile, &error_message) != 0) {
-        fprintf(stderr, "Error: Could not output object file '%s': %s.\n", asm_path, error_message);
+    if (LLVMTargetMachineEmitToFile(w->llvm.target_machine, w->llvm.module, asm_path, LLVMAssemblyFile, &error_message) != 0) {
+        fprintf(stderr, "Error: Could not output assembly file '%s': %s.\n", asm_path, error_message);
+        LLVMDisposeMessage(error_message);
+    }
+
+    if (LLVMTargetMachineEmitToFile(w->llvm.target_machine, w->llvm.module, obj_path, LLVMObjectFile, &error_message) != 0) {
+        fprintf(stderr, "Error: Could not output object file '%s': %s.\n", obj_path, error_message);
         LLVMDisposeMessage(error_message);
     }
 }
