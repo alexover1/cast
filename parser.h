@@ -479,13 +479,14 @@ void parse_declaration_value(Parser *p, Ast_Declaration *decl);
 Ast_Declaration *parse_declaration(Parser *p);
 
 Ast_Block *parse_block(Parser *p);
-Ast_Block *parse_toplevel(Parser *p);
 void parse_into_block(Parser *p, Ast_Block *block);
 Ast_Statement *parse_while_statement(Parser *p);
 Ast_Statement *parse_if_statement(Parser *p);
 Ast_Statement *parse_for_statement(Parser *p);
 Ast_Statement *parse_assignment(Parser *p, Ast_Expression *pointer_expression);
 Ast_Statement *parse_statement(Parser *p);
+
+void parse_toplevel(Parser *p);
 
 Ast_Declaration *find_declaration_in_block(const Ast_Block *block, String_View name);
 Ast_Declaration *find_declaration_from_identifier(const Ast_Ident *ident);

@@ -1,0 +1,16 @@
+// libc bindings for ax.
+
+printf :: (format: *u8, ..) #foreign;
+puts :: (s: *u8) -> int #foreign;
+putchar :: (c: s32) -> int #foreign;
+exit :: (status: s32) #foreign;
+
+print_integer :: (x_: s32) {
+    x := x_;
+    if x > 9 {
+        a := x / 10;
+        x -= a * 10;
+        print_integer(a);
+    }
+    putchar(x + "0");
+}

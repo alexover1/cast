@@ -437,10 +437,11 @@ Ast_Lambda *parse_lambda_definition(Parser *p, Ast_Type_Definition *lambda_type)
                 lambda->my_body_declaration->my_type = lambda_type;
                 lambda->is_foreign = true;
                 Exit_Block(p, lambda_type->lambda.arguments_block);
-                return xx lambda;
+                return lambda;
             }
 
             parser_report_error(p, token.location, "Unknown directive '"SV_Fmt"'.", SV_Arg(token.string_value));
+            return NULL;
         }
     }
 
@@ -1036,6 +1037,37 @@ Ast_Statement *parse_assignment(Parser *p, Ast_Expression *pointer_expression)
     return xx assign;
 }
 
+Ast_Statement *parse_directive_statement(Parser *p)
+{
+    Token token = eat_token_type(p, TOKEN_IDENT, "Expected an identifier because we parsed an alphabetic character after '#'.");
+        
+    if (sv_eq(token.string_value, sv_from_cstr("import_system_library"))) {
+        Source_Location loc = token.location;
+
+        token = eat_token_type(p, TOKEN_STRING, "Expected a string constant with the library path after #import_system_library.");
+
+        Ast_Import *import = ast_alloc(p, loc, AST_IMPORT, sizeof(*import)); 
+        import->path_name = token.string_value;
+        import->is_system_library = true;
+        return xx import;
+    }
+        
+    if (sv_eq(token.string_value, sv_from_cstr("load"))) {
+        token = eat_token_type(p, TOKEN_STRING, "Expected a string constant with the library path after #import_system_library.");
+
+        void workspace_add_file(Workspace *w, const char *path_as_cstr);
+
+        const char *path_as_cstr = arena_sv_to_cstr(&temporary_arena, token.string_value);
+        workspace_add_file(p->workspace, path_as_cstr);
+        eat_token_type(p, ';', "Expected semicolon after load directive.");
+
+        return NULL;
+    }
+
+    parser_report_error(p, token.location, "Unknown directive '"SV_Fmt"'.", SV_Arg(token.string_value));
+    return NULL;
+}
+
 Ast_Statement *parse_statement(Parser *p)
 {
     Token token = peek_next_token(p);
@@ -1087,19 +1119,7 @@ Ast_Statement *parse_statement(Parser *p)
         eat_next_token(p);
 
         if (isalpha(peek_character(p))) {
-            token = eat_token_type(p, TOKEN_IDENT, "Expected an identifier because we parsed an alphabetic character after '#'.");
-            if (sv_eq(token.string_value, sv_from_cstr("import_system_library"))) {
-                Source_Location loc = token.location;
-
-                token = eat_token_type(p, TOKEN_STRING, "Expected a string constant with the library path after #import_system_library.");
-
-                Ast_Import *import = ast_alloc(p, loc, AST_IMPORT, sizeof(*import)); 
-                import->path_name = token.string_value;
-                import->is_system_library = true;
-                return xx import;
-            }
-            parser_report_error(p, token.location, "Unknown directive '"SV_Fmt"'.", SV_Arg(token.string_value));
-            return NULL;
+            return parse_directive_statement(p);
         }
 
         parser_report_error(p, token.location, "Expected a statement but got '#'.");
@@ -1255,17 +1275,14 @@ Ast_Declaration *parse_declaration(Parser *p)
     return decl;
 }
 
-Ast_Block *parse_toplevel(Parser *p)
+void parse_toplevel(Parser *p)
 {
-    // TODO: what do we set the location to?
-    p->current_block = ast_alloc(p, (Source_Location){0}, AST_BLOCK, sizeof(Ast_Block));
-
     while (1) {
-        if (p->reported_error) return p->current_block;
+        if (p->reported_error) break;
 
         if (peek_next_token(p).type == TOKEN_END_OF_INPUT) {
             eat_next_token(p);
-            return p->current_block;
+            break;
         }
 
         Ast_Statement *stmt = parse_statement(p);
@@ -1280,8 +1297,6 @@ Ast_Block *parse_toplevel(Parser *p)
             if (token.type == ';') eat_next_token(p);
         }
     }
-
-    UNREACHABLE;
 }
 
 #define RED   "\x1B[31m"

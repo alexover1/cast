@@ -172,15 +172,15 @@ void workspace_llvm(Workspace *w)
             LLVMValueRef function = LLVMAddFunction(w->llvm.module, "", type);
             LLVMSetFunctionCallConv(function, LLVMCCallConv);
 
-            For (decl->my_type->lambda.argument_types) {
-                if (decl->my_type->lambda.argument_types[it]->kind == TYPE_DEF_STRUCT) {
-                    // const unsigned NoUndef = 38;
-                    // const unsigned ReadOnly = 48;
-                    // const unsigned ByVal = 72;
-                    // LLVMAttributeRef attr = LLVMCreateEnumAttribute(w->llvm.context, ReadOnly, 0);
-                    // LLVMAddAttributeAtIndex(function, it+1, attr);
-                }
-            }
+            // For (decl->my_type->lambda.argument_types) {
+            //     if (decl->my_type->lambda.argument_types[it]->kind == TYPE_DEF_STRUCT) {
+            //         const unsigned NoUndef = 38;
+            //         const unsigned ReadOnly = 48;
+            //         const unsigned ByVal = 72;
+            //         LLVMAttributeRef attr = LLVMCreateEnumAttribute(w->llvm.context, ReadOnly, 0);
+            //         LLVMAddAttributeAtIndex(function, it+1, attr);
+            //     }
+            // }
             
             decl->llvm_value = function;
         }
@@ -238,6 +238,7 @@ void workspace_init(Workspace *w, const char *name)
 {
     w->name = name;
     w->llvm = (Llvm){0};
+    w->global_block = context_alloc(sizeof(Ast_Block));
     w->declarations = NULL;
     w->files = NULL;
 
@@ -274,10 +275,10 @@ inline void workspace_parse_entire_file(Workspace *w, Source_File file)
 
     // Create a parser and do some parsing!
     Parser *parser = parser_init(w, fid);
+    parser->current_block = w->global_block;
 
     parse_toplevel(parser);
     if (parser->reported_error) exit(1);
-    // flatten_stmt_for_typechecking(w, xx block);
 
     free(parser);
 }

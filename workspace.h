@@ -27,6 +27,7 @@ typedef struct {
 struct Workspace {
     const char *name;
     Llvm llvm;
+    Ast_Block *global_block;
     Ast_Declaration **declarations;
 
     Source_File *files;

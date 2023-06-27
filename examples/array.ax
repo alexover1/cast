@@ -1,25 +1,25 @@
 array_test :: () {
-	array: [5] u64;
-	
+	array: [5] int;
+
 	format := "The array at %p has %lld elements\n";
 	printf(format.data, *array, array.count);
 
 	format = "%p: %lld\n";
 
 	for 0..array.count-1 {
-		array[it] = (it * 3) as u64;
+		array[it] = (it+1) * 3;
 		printf(format.data, *array[it], array[it]);
 	}
 }
 
 slice_test :: () {
-	array: [5] u64;
+	array: [5] int;
 
 	for 0..array.count-1 {
-		array[it] = (it * 3) as u64;
+		array[it] = (it+1) * 3;
 	}
 
-	slice: [] u64;
+	slice: [] int;
 	slice.data = *array[0];
 	slice.count = array.count;
 
@@ -36,14 +36,14 @@ slice_test :: () {
 }
 
 struct_packing :: () {
-	Rectangle :: struct {
-		// color: [4] u8;
+	My_Struct :: struct {
 		byte: u8;
 		width: u32;
-		height: u32;
+		height: u64;
 	}
 
-	rect := Rectangle.{170, 100, 200};
+	// 0xaa, 0xcafe, 0xc8
+	my_struct := My_Struct.{170, 51966, 200};
 
 	packed_array: [2] u64;
 
@@ -51,29 +51,26 @@ struct_packing :: () {
 	slice: [] u64;
 	slice.data = *packed_array[0];
 	slice.count = packed_array.count;
-	pack_struct((*rect) as *u8, 12, slice); // TODO: size_of
 
-	i := 0;
-	while i < packed_array.count {
+	pack_struct((*my_struct) as *u8, 13, slice); // TODO: size_of
+
+	for 0..packed_array.count-1 {
 		format := "0x%llx\n";
-		printf(format.data, packed_array[i]);
-		i += 1;
+		printf(format.data, packed_array[it]);
 	}
 }
 
 main :: () -> int {
-	array_test();
-	slice_test();
-	// struct_packing();
+	// array_test();
+	// slice_test();
+	struct_packing();
 	return 0;
 }
 
-sum :: (array: [] u64) -> u64 {
-	sum: u64;
-	i := 0;
-	while i < array.count {
-		sum += array[i];
-		i += 1;
+sum :: (array: [] int) -> int {
+	sum: int;
+	for 0..array.count-1 {
+		sum += array[it];
 	}
 	return sum;
 }
@@ -85,12 +82,12 @@ pack_struct :: (input: *u8, input_size: int, output: []u64) {
     end := input + input_size;
 
     while cursor < end {
-        array_index: u64 = output_index / 64;
-        bit_index: u64 = output_index % 64;
-        mask := input.* as u64 << bit_index;
+        array_index := output_index / 64;
+        bit_index := output_index % 64;
+        mask := cursor.* as u64 << bit_index;
         output[array_index] |= mask;
         output_index += 8;
-        cursor = cursor + 1;
+		cursor += 1;
     }
 }
 
