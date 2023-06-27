@@ -2,14 +2,13 @@
 
 #include <llvm-c/Core.h>
 #include <llvm-c/Target.h>
-#include <llvm-c/Analysis.h>
 #include <llvm-c/TargetMachine.h>
+#include <llvm-c/Analysis.h>
 
-#ifndef _WIN32
-#define LLVM_TARGET_TRIPLE "x86_64-pc-linux-gnu"
-#else
-#define LLVM_TARGET_TRIPLE "x86_64-pc-windows"
-#endif
+#include <llvm-c/ExecutionEngine.h>
+#include <llvm-c/Transforms/Utils.h>
+#include <llvm-c/Transforms/InstCombine.h>
+#include <llvm-c/Transforms/Scalar.h>
 
 #include "parser.h"
 #include "typecheck.h"
@@ -19,6 +18,8 @@ typedef struct {
     LLVMModuleRef module;
     LLVMBuilderRef builder;
     LLVMTargetMachineRef target_machine;
+    LLVMExecutionEngineRef execution_engine;
+
     LLVMTypeRef string_type;
     LLVMTypeRef slice_type;
     LLVMTypeRef dynamic_array_type;
@@ -64,6 +65,7 @@ void report_info(Workspace *workspace, Source_Location location, const char *for
 // LLVM stuff:
 
 void workspace_setup_llvm(Workspace *w);
+void workspace_execute_llvm(Workspace *w);
 void workspace_dispose_llvm(Workspace *w);
 
 LLVMValueRef llvm_get_named_value(LLVMValueRef function, const char *name);

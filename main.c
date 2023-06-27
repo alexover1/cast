@@ -29,6 +29,7 @@ int main(int argc, char **argv)
     workspace_setup_llvm(&w0);
     workspace_llvm(&w0);
     workspace_save(&w0);
+    workspace_execute_llvm(&w0);
     workspace_dispose_llvm(&w0);
 
     arena_free(&temporary_arena);

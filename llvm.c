@@ -1,7 +1,3 @@
-#include <llvm-c/Core.h>
-#include <llvm-c/Target.h>
-#include <limits.h> // LLONG_MIN
-
 #include "common.h"
 #include "workspace.h"
 
@@ -88,10 +84,63 @@ void workspace_setup_llvm(Workspace *w)
     w->llvm.dynamic_array_type = LLVMStructTypeInContext(w->llvm.context, elems, 3, 1); // 1 means packed
 }
 
+void workspace_execute_llvm(Workspace *w)
+{
+    Ast_Declaration *main_decl = find_declaration_in_block(w->global_block, sv_from_cstr("main"));
+    if (!main_decl) {
+        fprintf(stderr, "Error: Cannot run a program with no 'main' entry point.");
+        workspace_dispose_llvm(w);
+        exit(1);
+    }
+    if (main_decl->root_expression->kind != AST_LAMBDA) {
+        report_error(w, main_decl->location, "'main' must be a procedure.");
+        workspace_dispose_llvm(w);
+        exit(1);
+    }
+
+    Ast_Lambda *lambda = xx main_decl->root_expression;
+
+    if (arrlen(lambda->type_definition->lambda.argument_types) != 0) {
+        report_error(w, main_decl->location, "'main' entry point must not take any arguments.");
+    }
+
+    // Verify and optimize the module
+    char* error = NULL;
+    LLVMVerifyModule(w->llvm.module, LLVMAbortProcessAction, &error);
+    LLVMDisposeMessage(error);
+    LLVMPassManagerRef passManager = LLVMCreatePassManager();
+    LLVMAddPromoteMemoryToRegisterPass(passManager);
+    LLVMAddInstructionCombiningPass(passManager);
+    LLVMAddReassociatePass(passManager);
+    LLVMAddGVNPass(passManager);
+    LLVMAddCFGSimplificationPass(passManager);
+    LLVMRunPassManager(passManager, w->llvm.module);
+    LLVMDisposePassManager(passManager);
+
+    // Create execution engine
+    error = NULL;
+    LLVMCreateExecutionEngineForModule(&w->llvm.execution_engine, w->llvm.module, &error);
+    if (error != NULL) {
+        fprintf(stderr, "Error: Failed to create execution engine: %s\n", error);
+        LLVMDisposeMessage(error);
+        workspace_dispose_llvm(w);
+        exit(1);
+    }
+
+    // Execute the function
+    LLVMRunFunction(w->llvm.execution_engine, lambda->my_body_declaration->llvm_value, 0, NULL);
+}
+
 void workspace_dispose_llvm(Workspace *w)
 {
     LLVMDisposeBuilder(w->llvm.builder);
-    LLVMDisposeModule(w->llvm.module);
+
+    if (w->llvm.execution_engine) {
+        LLVMDisposeExecutionEngine(w->llvm.execution_engine);
+    } else {
+        LLVMDisposeModule(w->llvm.module);
+    }
+    
     LLVMContextDispose(w->llvm.context); // @Bad: Why is this not consistently named?
 }
 
@@ -281,13 +330,13 @@ LLVMValueRef llvm_const_string(Llvm llvm, const char *data, size_t count)
 {
     // Create the array and *u8 types.
     LLVMTypeRef u8_type = LLVMInt8TypeInContext(llvm.context);
-    LLVMTypeRef array_type = LLVMArrayType(u8_type, count);
+    LLVMTypeRef array_type = LLVMArrayType(u8_type, count+1); // +1 for zero termination
     LLVMTypeRef pointer_type = LLVMPointerTypeInContext(llvm.context, 0);
-    
+
     // Create global variable with the array of characters.
     LLVMValueRef global_string = LLVMAddGlobal(llvm.module, array_type, "");
     LLVMSetLinkage(global_string, LLVMPrivateLinkage);
-    LLVMSetInitializer(global_string, LLVMConstStringInContext(llvm.context, data, count, DONT_ZERO_TERMINATE));
+    LLVMSetInitializer(global_string, LLVMConstStringInContext(llvm.context, data, count, 0));
 
     return LLVMConstBitCast(global_string, pointer_type);
 }
