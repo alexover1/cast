@@ -16,11 +16,11 @@ typedef enum {
     TOKEN_NUMBER = 257,
     TOKEN_STRING = 258,
 
-    TOKEN_PLUSEQUALS = 259,
-    TOKEN_MINUSEQUALS = 260,
-    TOKEN_TIMESEQUALS = 261,
-    TOKEN_DIVEQUALS = 262,
-    TOKEN_MODEQUALS = 263,
+    TOKEN_PLUSEQUALS = 400 + '+',
+    TOKEN_MINUSEQUALS = 400 + '-',
+    TOKEN_TIMESEQUALS = 400 + '*',
+    TOKEN_DIVEQUALS = 400 + '/',
+    TOKEN_MODEQUALS = 400 + '%',
     TOKEN_ISEQUAL = 264,
     TOKEN_ISNOTEQUAL = 265,
     TOKEN_LOGICAL_AND = 266,
@@ -36,9 +36,9 @@ typedef enum {
     TOKEN_SHIFT_LEFT = 273,
     TOKEN_SHIFT_RIGHT = 274,
     // 275 is unused
-    TOKEN_BITWISE_AND_EQUALS = 276,
-    TOKEN_BITWISE_OR_EQUALS = 277,
-    TOKEN_BITWISE_XOR_EQUALS = 278,
+    TOKEN_BITWISE_AND_EQUALS = 400 + '&',
+    TOKEN_BITWISE_OR_EQUALS = 400 + '|',
+    TOKEN_BITWISE_XOR_EQUALS = 400 + '^',
 
     TOKEN_ARRAY_SUBSCRIPT = 279, // Not a token, but needed to work as a binary node in the parse tree.
     TOKEN_POINTER_DEREFERENCE = 280, // Also not a token, need for unary node.

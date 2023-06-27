@@ -308,6 +308,7 @@ LLVMValueRef llvm_build_pointer(Workspace *w, Ast_Expression *expr)
         const Ast_Ident *ident = xx expr;          
         assert(ident->resolved_declaration);
         assert(!(ident->resolved_declaration->flags & DECLARATION_IS_CONSTANT)); // It should have been substituted.
+        assert(!(ident->resolved_declaration->flags & DECLARATION_IS_FOR_LOOP_ITERATOR)); // Should have thrown an error that you can't assign to this.
         assert(ident->resolved_declaration->llvm_value); // Must have been initialized.
         return ident->resolved_declaration->llvm_value;
     }
@@ -477,10 +478,9 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
         // Because during typechecking we assured that the variable's initialization came before us, this is safe.
         assert(ident->resolved_declaration->llvm_value);
 
-        // If you use an array by-value you get a pointer.
-        // if (ident->resolved_declaration->my_type->kind == TYPE_DEF_ARRAY && ident->resolved_declaration->my_type->array.kind == ARRAY_KIND_FIXED) {
-        //     return ident->resolved_declaration->llvm_value;
-        // }
+        if (ident->resolved_declaration->flags & DECLARATION_IS_FOR_LOOP_ITERATOR) {
+            return ident->resolved_declaration->llvm_value;
+        }
 
         return LLVMBuildLoad2(
             llvm.builder,
@@ -610,21 +610,6 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
             values[it] = llvm_build_expression(w, inst->arguments[it]);
         }
         return LLVMConstStructInContext(llvm.context, values, n, USE_STRUCT_PACKING);
-
-        // LLVMTypeRef struct_type = llvm_get_type(w, inst->type_definition);
-        // LLVMValueRef struct_pointer = lvalue;
-
-        // For (inst->arguments) {
-        //     LLVMValueRef field_pointer = LLVMBuildStructGEP2(
-        //         llvm.builder,
-        //         struct_type,
-        //         struct_pointer,
-        //         it,
-        //         "");
-        //     LLVMValueRef field_value = llvm_build_rvalue(w, field_pointer, inst->arguments[it]);
-        //     if (field_value) LLVMBuildStore(llvm.builder, field_value, field_pointer);
-        // }
-        // return NULL;
     }
     }
 }
@@ -699,12 +684,48 @@ void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *st
         LLVMPositionBuilderAtEnd(llvm.builder, basic_block_merge);
         break;
     }
-    // case AST_FOR: {
-    //     LLVMBasicBlockRef basic_block_loop = LLVMAppendBasicBlock(function, "for_loop");
-    //     LLVMBuildBr(llvm.builder, basic_block_loop); // Implicit break from current block to the loop.
-    //     LLVMPositionBuilderAtEnd(llvm.builder, basic_block_loop);
-        
-    // }
+    case AST_FOR: {
+        Ast_For *for_stmt = xx stmt;
+            
+        LLVMBasicBlockRef basic_block_current = LLVMGetLastBasicBlock(function);
+
+        // Add the loop block.
+        LLVMBasicBlockRef basic_block_loop = LLVMAppendBasicBlock(function, "loop");
+        LLVMBuildBr(llvm.builder, basic_block_loop); // Implicit break from current block to the loop.
+        LLVMPositionBuilderAtEnd(llvm.builder, basic_block_loop);
+
+        LLVMTypeRef i64 = LLVMInt64TypeInContext(llvm.context);
+
+        LLVMValueRef zero = LLVMConstInt(i64, 0, 0);
+        LLVMValueRef it_phi = LLVMBuildPhi(llvm.builder, i64, "it_phi");
+
+        LLVMAddIncoming(it_phi, &zero, &basic_block_current, 1);
+
+        for_stmt->iterator_declaration->llvm_value = it_phi;
+
+        // Temporary assert until we have iterators over arrays.
+        assert(for_stmt->range_expression->kind == AST_BINARY_OPERATOR);
+        const Ast_Binary_Operator *binary = xx for_stmt->range_expression;
+        assert(binary->operator_type == TOKEN_DOUBLE_DOT);
+
+        // Add the loop body & the exit condition.
+        LLVMBasicBlockRef basic_block_then = LLVMAppendBasicBlock(function, "then");
+        LLVMBasicBlockRef basic_block_merge = LLVMAppendBasicBlock(function, "merge");       
+
+        LLVMValueRef cond = LLVMBuildICmp(llvm.builder, LLVMIntSLE, it_phi, llvm_build_expression(w, binary->right), "");
+        LLVMBuildCondBr(llvm.builder, cond, basic_block_then, basic_block_merge);
+
+        // Emit code for the then block.
+        LLVMPositionBuilderAtEnd(llvm.builder, basic_block_then);
+        llvm_build_statement(w, function, for_stmt->then_statement);
+        LLVMValueRef it_incr = LLVMBuildAdd(llvm.builder, it_phi, LLVMConstInt(i64, 1, 0), "it_incr");
+        LLVMAddIncoming(it_phi, &it_incr, &basic_block_then, 1);
+        LLVMBuildBr(llvm.builder, basic_block_loop);
+
+        // Emit code for the merge block.
+        LLVMPositionBuilderAtEnd(llvm.builder, basic_block_merge);
+        break;
+    }
     case AST_LOOP_CONTROL: {
         
     }
@@ -732,50 +753,10 @@ void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *st
     }
     case AST_ASSIGNMENT: {
         Ast_Assignment *assign = xx stmt;
-        Ast_Type_Definition *defn = assign->pointer->inferred_type;
-
         LLVMValueRef pointer = llvm_build_pointer(w, assign->pointer);
         LLVMValueRef value = llvm_build_expression(w, assign->value);
-
-        if (assign->operator_type == '=') {
-            LLVMBuildStore(llvm.builder, value, pointer);
-            break;
-        }
-
-        // Otherwise, build the arithmetic.
-        LLVMIntPredicate int_predicate;
-        LLVMRealPredicate real_predicate;
-        LLVMOpcode opcode = llvm_get_opcode(assign->operator_type, defn, &int_predicate, &real_predicate);
-
-        LLVMValueRef current = LLVMBuildLoad2(llvm.builder, llvm_get_type(w, defn), pointer, "");
-        LLVMValueRef new_value = LLVMBuildBinOp(llvm.builder, opcode, current, value, "");
-        LLVMBuildStore(llvm.builder, new_value, pointer);
+        LLVMBuildStore(llvm.builder, value, pointer);
         break;
-
-        // if (assign->pointer->kind == AST_IDENT) {
-        //     Ast_Ident *ident = xx assign->pointer;
-        //     Ast_Type_Definition *defn = assign->pointer->inferred_type;
-
-        //     LLVMValueRef pointer = ident->resolved_declaration->llvm_value;
-        //     LLVMValueRef value = llvm_build_expression(w, assign->value);
-
-        //     if (assign->operator_type == '=') {
-        //         LLVMBuildStore(llvm.builder, value, pointer);
-        //         break;
-        //     }
-
-        //     // Otherwise, build the arithmetic.
-        //     LLVMIntPredicate int_predicate;
-        //     LLVMRealPredicate real_predicate;
-        //     LLVMOpcode opcode = llvm_get_opcode(assign->operator_type, defn, &int_predicate, &real_predicate);
-
-        //     LLVMValueRef current = LLVMBuildLoad2(llvm.builder, llvm_get_type(w, defn), pointer, "");
-        //     LLVMValueRef new_value = LLVMBuildBinOp(llvm.builder, opcode, current, value, "");
-        //     LLVMBuildStore(llvm.builder, new_value, pointer);
-        //     break;
-        // }
-
-        UNIMPLEMENTED;
     }
     case AST_EXPRESSION_STATEMENT: {
         Ast_Expression_Statement *x = xx stmt;

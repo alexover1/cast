@@ -143,6 +143,10 @@ static bool statement_requires_semicolon(Ast_Statement *stmt)
         if (if_stmt->else_statement) return statement_requires_semicolon(if_stmt->else_statement);
         return statement_requires_semicolon(if_stmt->then_statement);
     }
+    case AST_FOR: {
+        Ast_For *for_stmt = xx stmt;
+        return statement_requires_semicolon(for_stmt->then_statement);
+    }
     case AST_LOOP_CONTROL:
     case AST_RETURN:
     case AST_USING:
@@ -399,6 +403,7 @@ Ast_Expression *parse_base_expression(Parser *p)
 
         eat_next_token(p);
         Ast_Expression *subexpression = parse_expression(p);
+        if (!subexpression) return NULL;
         eat_token_type(p, ')', "Missing closing parenthesis around expression.");
         return subexpression;
     }
@@ -579,6 +584,7 @@ Ast_Type_Definition *parse_enum_defn(Parser *p)
         }
 
         Ast_Expression *value = parse_expression(p);
+        if (!value) return NULL;
         eat_token_type(p, ';', "Expected semicolon after declaration.");
         Ast_Declaration *member = make_declaration(p, token.location);
         member->ident = make_identifier(p, token);
@@ -836,6 +842,32 @@ Ast_Type_Definition *parse_type_definition(Parser *parser, Ast_Expression *type_
     UNREACHABLE;
 }
 
+Ast_Statement *parse_while_statement(Parser *p)
+{
+    Token token = eat_next_token(p);
+    assert(token.type == TOKEN_KEYWORD_WHILE);
+
+    Ast_Statement *previous_loop = p->current_loop;
+        
+    Ast_While *while_stmt = ast_alloc(p, token.location, AST_WHILE, sizeof(*while_stmt));
+    while_stmt->condition_expression = parse_expression(p);
+    if (!while_stmt->condition_expression) return NULL;
+
+    p->current_loop = xx while_stmt;
+
+    // Check for "then" keyword and consume it.
+    // TODO: do we want/need this?
+    token = peek_next_token(p);
+    if (token.type == TOKEN_KEYWORD_THEN) {
+        eat_next_token(p);
+    }
+    while_stmt->then_statement = parse_statement(p);
+
+    p->current_loop = previous_loop;
+
+    return xx while_stmt;
+}
+
 Ast_Statement *parse_if_statement(Parser *p)
 {
     Token token = eat_next_token(p);
@@ -844,6 +876,7 @@ Ast_Statement *parse_if_statement(Parser *p)
     Ast_If *if_stmt = ast_alloc(p, token.location, AST_IF, sizeof(*if_stmt));
     
     if_stmt->condition_expression = parse_expression(p);
+    if (!if_stmt->condition_expression) return NULL;
 
     // Check for "then" keyword and consume it.
     token = peek_next_token(p);
@@ -862,10 +895,73 @@ Ast_Statement *parse_if_statement(Parser *p)
     return xx if_stmt;
 }
 
+Ast_Statement *parse_for_statement(Parser *p)
+{
+    Token token = eat_next_token(p);
+    assert(token.type == TOKEN_KEYWORD_FOR);
+    
+    Ast_Statement *previous_loop = p->current_loop;
+        
+    Ast_For *for_stmt = ast_alloc(p, token.location, AST_FOR, sizeof(*for_stmt));
+
+    // We create an implicit block for the "it" and "it_index" declarations.
+    Ast_Block *block = ast_alloc(p, token.location, AST_BLOCK, sizeof(*block));
+    Enter_Block(p, block);
+
+    for_stmt->iterator_declaration = make_declaration(p, token.location);
+    for_stmt->iterator_declaration->flags = DECLARATION_IS_FOR_LOOP_ITERATOR | DECLARATION_HAS_BEEN_TYPECHECKED;
+
+    Ast_Number *zero = ast_alloc(p, token.location, AST_NUMBER, sizeof(*zero));
+    zero->as.integer = 0;
+    zero->_expression.inferred_type = p->workspace->type_def_int;
+    for_stmt->iterator_declaration->my_type = p->workspace->type_def_int;
+    for_stmt->iterator_declaration->root_expression = xx zero;
+
+    if (peek_next_token(p).type == TOKEN_IDENT && peek_token(p, 1).type == ':') {
+        token = eat_next_token(p);
+        eat_next_token(p); // ':'
+    } else {
+        token.string_value.data = "it";
+        token.string_value.count = 2;
+    }
+
+    for_stmt->iterator_declaration->ident = make_identifier(p, token); // This uses the location of TOKEN_KEYWORD_FOR.
+    checked_add_to_scope(p, p->current_block, for_stmt->iterator_declaration);
+
+    // Parse the value we are iterating over.
+    for_stmt->range_expression = parse_expression(p);
+    if (!for_stmt->range_expression) return NULL;
+
+    // Range-based for loop:  0..n
+    if (peek_next_token(p).type == TOKEN_DOUBLE_DOT) {
+        token = eat_next_token(p);
+        Ast_Binary_Operator *binary = ast_alloc(p, token.location, AST_BINARY_OPERATOR, sizeof(*binary));
+        binary->left = for_stmt->range_expression;
+        binary->operator_type = token.type;
+        binary->right = parse_expression(p);
+        if (!binary->right) return NULL;
+        for_stmt->range_expression = xx binary;
+    }
+
+    p->current_loop = xx for_stmt;
+
+    for_stmt->then_statement = parse_statement(p);
+
+    p->current_loop = previous_loop;
+
+    Exit_Block(p, block);
+    return xx for_stmt;    
+}
+
 void parse_into_block(Parser *p, Ast_Block *block)
 {
     Enter_Block(p, block);
     while (1) {
+        if (p->reported_error) {
+            Exit_Block(p, block);
+            return;
+        }
+        
         Token token = peek_next_token(p);
         if (token.type == '}') {
             eat_next_token(p);
@@ -876,6 +972,7 @@ void parse_into_block(Parser *p, Ast_Block *block)
         // Catch this before handing it off to parse_statement for a better error message.
         if (token.type == TOKEN_END_OF_INPUT) {
             parser_report_error(p, token.location, "Reached the end of the input before terminating curly brace.");
+            parser_report_error(p, block->_statement.location, "... the block started here.");
             // TODO: Print where the block started.
             // TODO: How can we make this type of error message better? We want to be able
             // to track the exact place where we are missing a brace, not just the end.
@@ -893,11 +990,6 @@ void parse_into_block(Parser *p, Ast_Block *block)
             // Check for a semicolon anyways.
             token = peek_next_token(p);
             if (token.type == ';') eat_next_token(p);
-        }
-
-        if (p->reported_error) {
-            Exit_Block(p, block);
-            return;
         }
     }
 
@@ -920,10 +1012,26 @@ Ast_Statement *parse_assignment(Parser *p, Ast_Expression *pointer_expression)
 {
     Token token = eat_next_token(p);
 
+    Ast_Expression *rhs = parse_expression(p);
+    if (!rhs) return NULL;
+
     Ast_Assignment *assign = ast_alloc(p, token.location, AST_ASSIGNMENT, sizeof(*assign));
     assign->pointer = pointer_expression;
-    assign->value = parse_expression(p);
-    assign->operator_type = token.type;
+    
+    if (token.type != '=') {
+        // We store  ptr += value  as  ptr = ptr + value;
+        
+        assert(token.type > 400);
+
+        Ast_Binary_Operator *binary = ast_alloc(p, token.location, AST_BINARY_OPERATOR, sizeof(*binary));
+        binary->left = pointer_expression;
+        binary->operator_type = token.type - 400;
+        binary->right = rhs;
+
+        assign->value = xx binary;
+    } else {
+        assign->value = rhs;
+    }
 
     return xx assign;
 }
@@ -947,28 +1055,11 @@ Ast_Statement *parse_statement(Parser *p)
     case TOKEN_KEYWORD_IF:
         return parse_if_statement(p);
 
-    case TOKEN_KEYWORD_WHILE: {
-        eat_next_token(p);
+    case TOKEN_KEYWORD_WHILE:
+        return parse_while_statement(p);
 
-        Ast_Statement *previous_loop = p->current_loop;
-            
-        Ast_While *while_stmt = ast_alloc(p, token.location, AST_WHILE, sizeof(*while_stmt));
-        while_stmt->condition_expression = parse_expression(p);
-
-        p->current_loop = xx while_stmt;
-
-        // Check for "then" keyword and consume it.
-        // TODO: do we want/need this?
-        token = peek_next_token(p);
-        if (token.type == TOKEN_KEYWORD_THEN) {
-            eat_next_token(p);
-        }
-        while_stmt->then_statement = parse_statement(p);
-
-        p->current_loop = previous_loop;
-
-        return xx while_stmt;
-    }
+    case TOKEN_KEYWORD_FOR:
+        return parse_for_statement(p);
 
     case TOKEN_KEYWORD_BREAK:
     case TOKEN_KEYWORD_CONTINUE:
@@ -1007,6 +1098,8 @@ Ast_Statement *parse_statement(Parser *p)
                 import->is_system_library = true;
                 return xx import;
             }
+            parser_report_error(p, token.location, "Unknown directive '"SV_Fmt"'.", SV_Arg(token.string_value));
+            return NULL;
         }
 
         parser_report_error(p, token.location, "Expected a statement but got '#'.");
@@ -1170,8 +1263,7 @@ Ast_Block *parse_toplevel(Parser *p)
     while (1) {
         if (p->reported_error) return p->current_block;
 
-        Token token = peek_next_token(p);
-        if (token.type == TOKEN_END_OF_INPUT) {
+        if (peek_next_token(p).type == TOKEN_END_OF_INPUT) {
             eat_next_token(p);
             return p->current_block;
         }
@@ -1184,7 +1276,7 @@ Ast_Block *parse_toplevel(Parser *p)
             eat_semicolon(p, stmt->location);
         } else {
             // Check for a semicolon anyways.
-            token = peek_next_token(p);
+            Token token = peek_next_token(p);
             if (token.type == ';') eat_next_token(p);
         }
     }
@@ -1553,6 +1645,14 @@ void print_stmt_to_builder(String_Builder *sb, const Ast_Statement *stmt, size_t
             sb_append_cstr(sb, " else ");
             print_stmt_to_builder(sb, if_stmt->else_statement, depth);
         }
+        break;
+    }
+    case AST_FOR: {
+        const Ast_For *for_stmt = xx stmt;
+        sb_append_cstr(sb, "for ");
+        print_expr_to_builder(sb, for_stmt->range_expression, depth);
+        sb_append_cstr(sb, " ");
+        print_stmt_to_builder(sb, for_stmt->then_statement, depth);
         break;
     }
     case AST_LOOP_CONTROL: {

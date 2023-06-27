@@ -464,6 +464,7 @@ const char *token_type_to_string(int type)
     case TOKEN_KEYWORD_THEN: return "then";
     case TOKEN_KEYWORD_ELSE: return "else";
     // case TOKEN_KEYWORD_CASE: return "case";
+    case TOKEN_KEYWORD_FOR: return "for";
     case TOKEN_KEYWORD_RETURN: return "return";
     case TOKEN_KEYWORD_STRUCT: return "struct";
     case TOKEN_KEYWORD_WHILE: return "while";

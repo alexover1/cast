@@ -71,7 +71,7 @@ typedef enum {
     AST_BLOCK = 1,
     AST_WHILE = 2,
     AST_IF = 3,
-    // AST_FOR = 4,
+    AST_FOR = 4,
     AST_LOOP_CONTROL = 5,
     AST_RETURN = 6,
     AST_USING = 7,
@@ -278,7 +278,6 @@ typedef struct {
 typedef struct {
     Ast_Statement _statement;
 
-    bool directive;
     Ast_Expression *condition_expression;
     Ast_Statement *then_statement;
 } Ast_While;
@@ -292,7 +291,13 @@ typedef struct {
     Ast_Statement *else_statement;
 } Ast_If;
 
-// TODO: Ast_For
+typedef struct {
+    Ast_Statement _statement;
+
+    Ast_Expression *range_expression;
+    Ast_Statement *then_statement;
+    Ast_Declaration *iterator_declaration;
+} Ast_For;
 
 typedef struct {
     Ast_Statement _statement;
@@ -346,7 +351,6 @@ typedef struct {
     
     Ast_Expression *pointer; // a.b.c
     Ast_Expression *value;
-    int operator_type; // If also applying an operator. ('=' if not).
 } Ast_Assignment;
 
 typedef struct {
@@ -364,6 +368,7 @@ enum {
     DECLARATION_IS_ENUM_VALUE = 0x10,
     DECLARATION_IS_LAMBDA_ARGUMENT = 0x20,
     DECLARATION_IS_POLYMORPHIC = 0x40,
+    DECLARATION_IS_FOR_LOOP_ITERATOR = 0x800,
     // These are set during typechecking.
     DECLARATION_TYPE_WAS_INFERRED_FROM_EXPRESSION = 0x80,
     DECLARATION_VALUE_WAS_INFERRED_FROM_TYPE = 0x100, // Default value (zero) was added.
@@ -476,7 +481,9 @@ Ast_Declaration *parse_declaration(Parser *p);
 Ast_Block *parse_block(Parser *p);
 Ast_Block *parse_toplevel(Parser *p);
 void parse_into_block(Parser *p, Ast_Block *block);
+Ast_Statement *parse_while_statement(Parser *p);
 Ast_Statement *parse_if_statement(Parser *p);
+Ast_Statement *parse_for_statement(Parser *p);
 Ast_Statement *parse_assignment(Parser *p, Ast_Expression *pointer_expression);
 Ast_Statement *parse_statement(Parser *p);
 

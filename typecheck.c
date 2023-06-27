@@ -141,9 +141,6 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
 
     Replace(decl->root_expression);
 
-    // TODO: String to char.
-    // Check if my_type is a numeric type and root_expression is a literal.
-
     if (decl->root_expression->kind == AST_NUMBER) {
         if (decl->flags & DECLARATION_IS_ENUM_VALUE) {
             assert(decl->my_type->kind == TYPE_DEF_ENUM); // Because it was set in parse_enum_defn().
@@ -361,8 +358,6 @@ void typecheck_number(Workspace *w, Ast_Number *number, Ast_Type_Definition *sup
     
     unsigned long low = supplied_type->number.literal_low->as.integer;
     unsigned long high = supplied_type->number.literal_high->as.integer;
-
-    // TODO: we need to compare differently based on signedness.
     
     if (number->as.integer > high) {
         report_error(w, number->_expression.location, "Numeric constant too big for type (max for %s is %lu).", supplied_type->name, high);
@@ -382,25 +377,6 @@ void typecheck_literal(Workspace *w, Ast_Literal *literal)
     case LITERAL_STRING: literal->_expression.inferred_type = w->type_def_string; break;
     case LITERAL_NULL:   literal->_expression.inferred_type = w->type_def_void;   break;
     }
-
-    // if (literal->default_type == w->type_def_string) {
-    //     if (supplied_type->number_flags & NUMBER_FLAGS_NUMBER && !(supplied_type->number_flags & NUMBER_FLAGS_FLOAT)) {
-    //         if (literal->string_value.count != 1) {
-    //             report_error(w, literal->_expression.location, "String literals can only cast to int if they are exactly 1 character.");
-    //         }
-            
-    //         Ast_Literal *char_literal = context_alloc(sizeof(*char_literal));
-    //         char_literal->_expression.location = literal->_expression.location;
-    //         char_literal->_expression.inferred_type = supplied_type;
-    //         char_literal->default_type = supplied_type;
-    //         char_literal->number_flags = NUMBER_FLAGS_NUMBER;
-    //         char_literal->integer_value = *literal->string_value.data;
-
-    //         literal->_expression.replacement = xx char_literal;
-    //         return;
-    //     }
-    //     goto error;
-    // }
 }
 
 void typecheck_identifier(Workspace *w, Ast_Ident *ident)
@@ -410,6 +386,12 @@ void typecheck_identifier(Workspace *w, Ast_Ident *ident)
         ident->resolved_declaration = find_declaration_from_identifier(ident);
         if (!ident->resolved_declaration) {
             report_error(w, ident->_expression.location, "Undeclared identifier '"SV_Fmt"'.", SV_Arg(ident->name));
+        }
+
+        For (ident->resolved_declaration->flattened) {
+            if (ident->resolved_declaration->flattened == xx ident) {
+                report_error(w, ident->_expression.location, "Circular depedency detected: '"SV_Fmt"'.", SV_Arg(ident->name));
+            }
         }
     }
 
@@ -513,14 +495,19 @@ inline Ast_Number *make_integer(Workspace *w, Source_Location loc, unsigned long
     return res;
 }
 
-Ast_Expression *fold_binary_arithmetic_or_comparison(Workspace *w, char operator_type, Ast_Number *left, Ast_Number *right)
+Ast_Expression *constant_arithmetic_or_comparison(Workspace *w, Ast_Binary_Operator *binary)
 {
+    assert(binary->left->kind == AST_NUMBER);
+    assert(binary->right->kind == AST_NUMBER);
+    Ast_Number *left = xx binary->left;
+    Ast_Number *right = xx binary->right;
+    
     Source_Location loc = left->_expression.location;
 
     // If either is float, we are float.
     if ((left->flags & NUMBER_FLAGS_FLOAT) || (right->flags & NUMBER_FLAGS_FLOAT)) {
         bool use_float64 = (left->flags & NUMBER_FLAGS_FLOAT64) || (right->flags & NUMBER_FLAGS_FLOAT64);
-        switch ((int)operator_type) {
+        switch (binary->operator_type) {
         case '+':                 return xx make_float_or_float64(w, loc, left->as.real + right->as.real, use_float64);
         case '-':                 return xx make_float_or_float64(w, loc, left->as.real - right->as.real, use_float64);
         case '*':                 return xx make_float_or_float64(w, loc, left->as.real * right->as.real, use_float64);
@@ -538,7 +525,7 @@ Ast_Expression *fold_binary_arithmetic_or_comparison(Workspace *w, char operator
     if ((left->flags & NUMBER_FLAGS_SIGNED) || (right->flags & NUMBER_FLAGS_SIGNED)) {
         signed long l = left->as.integer;
         signed long r = right->as.integer;
-        switch ((int)operator_type) {
+        switch (binary->operator_type) {
         case '+':                 return xx make_integer(w, loc, l + r, true);
         case '-':                 return xx make_integer(w, loc, l - r, true);
         case '*':                 return xx make_integer(w, loc, l * r, true);
@@ -554,7 +541,7 @@ Ast_Expression *fold_binary_arithmetic_or_comparison(Workspace *w, char operator
     
     unsigned long l = left->as.integer;
     unsigned long r = right->as.integer;
-    switch ((int)operator_type) {
+    switch (binary->operator_type) {
     case '+':                 return xx make_integer(w, loc, l +  r, false);
     case '-':                 return xx make_integer(w, loc, l -  r, false);
     case '*':                 return xx make_integer(w, loc, l *  r, false);
@@ -568,77 +555,98 @@ Ast_Expression *fold_binary_arithmetic_or_comparison(Workspace *w, char operator
     }
 }
 
-Ast_Type_Definition *typecheck_binary_arithmetic(Workspace *w, char operator_type, Source_Location site, Ast_Expression *left, Ast_Expression *right)
+// Checks that the types of the binary operator match and are integers.
+Ast_Type_Definition *typecheck_binary_int_operator(Workspace *w, Ast_Binary_Operator *binary)
 {
-    // Check for pointer arithmetic.
-    if (left->inferred_type->kind == TYPE_DEF_POINTER) {
-        if (right->inferred_type->kind == TYPE_DEF_POINTER) {
-            // Pointer and pointer.
-            if (!types_are_equal(left->inferred_type->pointer_to, right->inferred_type->pointer_to)) {
-                report_error(w, site, "Type mismatch: Cannot perform pointer arithmetic on points of different types (got %s and %s).",
-                    type_to_string(left->inferred_type), type_to_string(right->inferred_type));
-            }
-        } else {
-            // Pointer and integer.
-            // TODO: TYPE_DEF_ANY
-            if (right->inferred_type->kind != TYPE_DEF_NUMBER) {
-                report_error(w, right->location, "Type mismatch: Pointer arithmetic operand must be a number (got %s).",
-                    type_to_string(right->inferred_type));
-            }
-            if (right->inferred_type->number.flags & NUMBER_FLAGS_FLOAT) {
-                report_error(w, right->location, "Type mismatch: Pointer arithmetic operand must be an integer (got %s).",
-                    type_to_string(right->inferred_type));
-            }
-        }
-        return left->inferred_type;
-    }
-
-    // The types must be equal, and they also must be numbers.
-
-    if (!check_that_types_match(w, right, left->inferred_type)) {
-        report_error(w, site, "Type mismatch: Types on either side of '%s' must be the same (got %s and %s).",
-            token_type_to_string(operator_type), type_to_string(left->inferred_type), type_to_string(right->inferred_type));
-    }
-
-    Ast_Type_Definition *defn = left->inferred_type; // Now they are the same.
+    // Currently, the left hand side is the determinant.
+    Ast_Type_Definition *defn = binary->left->inferred_type;
 
     if (defn->kind != TYPE_DEF_NUMBER) {
-        report_error(w, site, "Type mismatch: Operator '%s' does not work on non-number types (got %s).",
-            token_type_to_string(operator_type), type_to_string(defn));
+        report_error(w, binary->_expression.location, "Type mismatch: Operator '%s' does not work on non-number types (got %s).",
+            token_type_to_string(binary->operator_type), type_to_string(defn));
     }
 
-    // I don't think we need to compare signedness here because we checked that types_are_equal.
+    if (defn->number.flags & NUMBER_FLAGS_FLOAT) {
+        report_error(w, binary->_expression.location, "Type mismatch: Operator '%s' does not work on floating-point types (got %s).",
+            token_type_to_string(binary->operator_type), type_to_string(defn));
+    }
+
+    if (!check_that_types_match(w, binary->right, binary->left->inferred_type)) {
+        report_error(w, binary->_expression.location, "Type mismatch: Types on either side of '%s' must be the same (got %s and %s).",
+            token_type_to_string(binary->operator_type), type_to_string(binary->left->inferred_type), type_to_string(binary->right->inferred_type));
+    }
 
     return defn;
 }
 
-void typecheck_binary_comparison(Workspace *w, char operator_type, Source_Location site, Ast_Expression *left, Ast_Expression *right)
+Ast_Type_Definition *typecheck_binary_arithmetic(Workspace *w, Ast_Binary_Operator *binary)
 {
-    if (!check_that_types_match(w, right, left->inferred_type)) {
-        report_error(w, site, "Type mismatch: Types on either side of '%s' must be the same (got %s and %s).",
-            token_type_to_string(operator_type), type_to_string(left->inferred_type), type_to_string(right->inferred_type));
+    // Check for pointer arithmetic.
+    if (binary->left->inferred_type->kind == TYPE_DEF_POINTER) {
+        if (binary->operator_type != '+' && binary->operator_type != '-') {
+            report_error(w, binary->_expression.location, "Type mismatch: Pointer arithmetic is only supported by the '+' or '-' operators.");
+        }
+        if (binary->right->inferred_type->kind == TYPE_DEF_POINTER) {
+            // Pointer and pointer.
+            if (!types_are_equal(binary->left->inferred_type->pointer_to, binary->right->inferred_type->pointer_to)) {
+                report_error(w, binary->_expression.location, "Type mismatch: Cannot perform pointer arithmetic on points of different types (got %s and %s).",
+                    type_to_string(binary->left->inferred_type), type_to_string(binary->right->inferred_type));
+            }
+        } else {
+            // Pointer and integer.
+            if (binary->right->inferred_type->kind != TYPE_DEF_NUMBER && (binary->right->inferred_type->number.flags & NUMBER_FLAGS_FLOAT)) {
+                report_error(w, binary->right->location, "Type mismatch: Pointer arithmetic operand must be a number (got %s).",
+                    type_to_string(binary->right->inferred_type));
+            }
+        }
+        return binary->left->inferred_type;
     }
 
-    Ast_Type_Definition *defn = left->inferred_type; // Now they are the same.
+    // The types must be equal, and they also must be numbers.
+
+    Ast_Type_Definition *defn = binary->left->inferred_type;
+
+    if (defn->kind != TYPE_DEF_NUMBER) {
+        report_error(w, binary->_expression.location, "Type mismatch: Operator '%s' does not work on non-number types (got %s).",
+            token_type_to_string(binary->operator_type), type_to_string(defn));
+    }
+
+    if (!check_that_types_match(w, binary->right, defn)) {
+        report_error(w, binary->_expression.location,
+            "Type mismatch: Types on either side of '%s' must be the same (got %s and %s).",
+            token_type_to_string(binary->operator_type),
+            type_to_string(binary->left->inferred_type),
+            type_to_string(binary->right->inferred_type));
+    }
+
+    return defn;
+}
+
+void typecheck_binary_comparison(Workspace *w, Ast_Binary_Operator *binary)
+{
+    if (!check_that_types_match(w, binary->right, binary->left->inferred_type)) {
+        report_error(w, binary->_expression.location,
+            "Type mismatch: Types on either side of '%s' must be the same (got %s and %s).",
+            token_type_to_string(binary->operator_type),
+            type_to_string(binary->left->inferred_type),
+            type_to_string(binary->right->inferred_type));
+    }
+
+    Ast_Type_Definition *defn = binary->left->inferred_type; // Now they are the same.
 
     if (defn->kind == TYPE_DEF_POINTER) return;
 
     if (defn->kind != TYPE_DEF_NUMBER) {
-        report_error(w, site, "Type mismatch: Operator '%s' does not work on non-number types (got %s).",
-            token_type_to_string(operator_type), type_to_string(defn));
+        report_error(w, binary->_expression.location, "Type mismatch: Operator '%s' does not work on non-number types (got %s).",
+            token_type_to_string(binary->operator_type), type_to_string(defn));
     }
-
-    // I don't think we need to compare signedness here because we checked that types_are_equal.
 }
 
 // @Cleanup: This whole function's error messages.
 void typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary)
 {
-    // Check for constant replacement.
-    Ast_Expression *left = binary->left;
-    Ast_Expression *right = binary->right;
-    Replace(left);
-    Replace(right);
+    Replace(binary->left);
+    Replace(binary->right);
 
     switch (binary->operator_type) {
     case '+':
@@ -648,85 +656,91 @@ void typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary)
     case '%':
         // If left and right are literals, replace us with a literal.
         // Technically, LLVM does this for us, but let's not rely on that.
-        if (left->kind == AST_NUMBER && right->kind == AST_NUMBER) {
-            binary->_expression.replacement = fold_binary_arithmetic_or_comparison(w, (char)binary->operator_type, xx left, xx right);
-            binary->_expression.replacement->inferred_type = left->inferred_type; // TODO: check this.
+        if (binary->left->kind == AST_NUMBER && binary->right->kind == AST_NUMBER) {
+            binary->_expression.replacement = constant_arithmetic_or_comparison(w, binary);
+            binary->_expression.replacement->inferred_type = binary->left->inferred_type; // TODO: check this.
             break;
         }
-        binary->_expression.inferred_type = typecheck_binary_arithmetic(w, (char)binary->operator_type, binary->_expression.location, left, right);
+        binary->_expression.inferred_type = typecheck_binary_arithmetic(w, binary);
         break;
+        
     case TOKEN_ISEQUAL:
     case TOKEN_ISNOTEQUAL:
-        if (!types_are_equal(left->inferred_type, right->inferred_type)) {
+        if (binary->left->kind == AST_NUMBER && binary->right->kind == AST_NUMBER) {
+            binary->_expression.replacement = constant_arithmetic_or_comparison(w, binary);
+            break;
+        }
+        if (!check_that_types_match(w, binary->right, binary->left->inferred_type)) {
             report_error(w, binary->_expression.location, "Type mismatch: Cannot compare values of different types (got %s and %s).",
-                type_to_string(left->inferred_type), type_to_string(right->inferred_type));
+                type_to_string(binary->left->inferred_type), type_to_string(binary->right->inferred_type));
         }
         binary->_expression.inferred_type = w->type_def_bool;
-        // TODO: fold_binary_comparison
+        // TODO: constant_comparison
         break;
+        
     case '>':
     case '<':
     case TOKEN_GREATEREQUALS:
     case TOKEN_LESSEQUALS:
         // If left and right are literals, replace us with a literal.
         // Technically, LLVM does this for us, but let's not rely on that.
-        if (left->kind == AST_NUMBER && right->kind == AST_NUMBER) {
-            binary->_expression.replacement = fold_binary_arithmetic_or_comparison(w, (char)binary->operator_type, xx left, xx right);
+        if (binary->left->kind == AST_NUMBER && binary->right->kind == AST_NUMBER) {
+            binary->_expression.replacement = constant_arithmetic_or_comparison(w, binary);
             break;
         }
-        typecheck_binary_comparison(w, (char)binary->operator_type, binary->_expression.location, left, right);
+        typecheck_binary_comparison(w, binary);
         binary->_expression.inferred_type = w->type_def_bool;
         break;
+        
     case TOKEN_LOGICAL_AND:
-    case TOKEN_LOGICAL_OR:
-        if (left->inferred_type != w->type_def_bool) {
-            report_error(w, left->location, "Type mismatch: Operator '%s' only works on boolean types (got %s).",
-                token_type_to_string(binary->operator_type), type_to_string(left->inferred_type));
+    case TOKEN_LOGICAL_OR: {
+        // TODO: check for constant.
+            
+        Ast_Expression *left = autocast_to_bool(w, binary->left);
+        if (!left) {
+            report_error(w, binary->left->location, "Type mismatch: Operator '%s' only works on boolean types (got %s).",
+                token_type_to_string(binary->operator_type), type_to_string(binary->left->inferred_type));
         }
-        if (right->inferred_type != w->type_def_bool) {
-            report_error(w, right->location, "Type mismatch: Operator '%s' only works on boolean types (got %s).",
-                token_type_to_string(binary->operator_type), type_to_string(right->inferred_type));
+            
+        Ast_Expression *right = autocast_to_bool(w, binary->right);
+        if (!right) {
+            report_error(w, binary->right->location, "Type mismatch: Operator '%s' only works on boolean types (got %s).",
+                token_type_to_string(binary->operator_type), type_to_string(binary->right->inferred_type));
         }
+            
+        binary->left = left;
+        binary->right = right;
         binary->_expression.inferred_type = w->type_def_bool;
         break;
+    }
+        
     case TOKEN_SHIFT_LEFT:
     case TOKEN_SHIFT_RIGHT: {
-        if (!check_that_types_match(w, right, left->inferred_type)) {
-            report_error(w, binary->_expression.location, "Type mismatch: Types on either side of '%s' must be the same (got %s and %s).",
-                token_type_to_string(binary->operator_type), type_to_string(left->inferred_type), type_to_string(right->inferred_type));
-        }
-
-        Ast_Type_Definition *defn = left->inferred_type; // Now they are the same.
-
-        if (defn->kind != TYPE_DEF_NUMBER) {
-            report_error(w, binary->_expression.location, "Type mismatch: Operator '%s' does not work on non-number types (got %s).",
-                token_type_to_string(binary->operator_type), type_to_string(defn));
-        }
-
-        if (defn->number.flags & NUMBER_FLAGS_FLOAT) {
-            report_error(w, binary->_expression.location, "Type mismatch: Operator '%s' does not work on floating-point types (got %s).",
-                token_type_to_string(binary->operator_type), type_to_string(defn));
-        }
+        binary->_expression.inferred_type = typecheck_binary_int_operator(w, binary);
 
         // Check for constants.
-        if (left->kind == AST_NUMBER && right->kind == AST_NUMBER) {
-            unsigned long l, r, result;
-            l = ((Ast_Number *)left)->as.integer;
-            r = ((Ast_Number *)right)->as.integer;
+        if (binary->left->kind == AST_NUMBER && binary->right->kind == AST_NUMBER) {
+            unsigned long left, right, result;
+            left  = ((Ast_Number *)binary->left)->as.integer;
+            right = ((Ast_Number *)binary->right)->as.integer;
             if (binary->operator_type == TOKEN_SHIFT_LEFT) {
-                result = l << r;
+                result = left << right;
             } else {
-                result = l >> r;
+                result = left >> right;
             }
             Ast_Number *number = make_number(result);
             number->_expression.inferred_type = w->type_def_int; // Because this can be changed at any point.
             number->_expression.location = binary->_expression.location;
 
             binary->_expression.replacement = xx number;
-            break;
         }
+        break;
+    }
 
-        binary->_expression.inferred_type = defn;
+    case TOKEN_BITWISE_AND:
+    case TOKEN_BITWISE_OR: {
+        // TODO: Constants.
+        binary->_expression.inferred_type = typecheck_binary_int_operator(w, binary);
         break;
     }
         
@@ -736,11 +750,20 @@ void typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary)
                 type_to_string(binary->left->inferred_type));
         }
         if (binary->right->inferred_type->kind != TYPE_DEF_NUMBER && (binary->right->inferred_type->number.flags & NUMBER_FLAGS_FLOAT)) {
-            report_error(w, binary->left->location, "Type mismatch: Wanted an integer but got %s.",
+            report_error(w, binary->left->location, "Type mismatch: Array subscript must be an integer (got %s).",
                 type_to_string(binary->right->inferred_type));
         }
         binary->_expression.inferred_type = binary->left->inferred_type->array.element_type;
         break;
+
+    case TOKEN_DOUBLE_DOT:
+        // So we must be inside of a range-based for loop.
+        binary->_expression.inferred_type = typecheck_binary_int_operator(w, binary);
+        break;
+        
+    default:
+        printf(">>> %s\n", token_type_to_string(binary->operator_type));
+        UNIMPLEMENTED;
     }
 }
 
@@ -1161,20 +1184,21 @@ void typecheck_expression(Workspace *w, Ast_Expression *expr)
 
 void typecheck_while(Workspace *w, Ast_While *while_stmt)
 {
-    // TODO: implicit bool conversions.
-
     Replace(while_stmt->condition_expression);
 
     if (while_stmt->condition_expression->inferred_type != w->type_def_bool) {
-        report_error(w, while_stmt->condition_expression->location, "Condition of 'while' statement must result in a boolean value (got %s).",
-            type_to_string(while_stmt->condition_expression->inferred_type));
+        Ast_Expression *expr = autocast_to_bool(w, while_stmt->condition_expression);
+        if (expr) {
+            while_stmt->condition_expression = expr;
+        } else {
+            report_error(w, while_stmt->condition_expression->location, "Condition of 'while' statement must result in a boolean value (got %s).",
+                type_to_string(while_stmt->condition_expression->inferred_type));
+        }
     }
 }
 
 void typecheck_if(Workspace *w, Ast_If *if_stmt)
 {
-    // TODO: implicit bool conversions.
-
     Replace(if_stmt->condition_expression);
 
     if (if_stmt->condition_expression->inferred_type != w->type_def_bool) {
@@ -1187,6 +1211,24 @@ void typecheck_if(Workspace *w, Ast_If *if_stmt)
                 type_to_string(if_stmt->condition_expression->inferred_type));
         }
     }
+}
+
+void typecheck_for(Workspace *w, Ast_For *for_stmt)
+{
+    Replace(for_stmt->range_expression);
+
+    // typecheck_declaration(w, for_stmt->iterator_declaration);
+    // assert(for_stmt->iterator_declaration->flags & DECLARATION_HAS_BEEN_TYPECHECKED);
+
+    if (for_stmt->range_expression->kind == AST_BINARY_OPERATOR) {
+        Ast_Binary_Operator *binary = xx for_stmt->range_expression;
+        if (binary->operator_type == TOKEN_DOUBLE_DOT) return;
+    }
+
+    if (for_stmt->range_expression->inferred_type->kind == TYPE_DEF_ARRAY) return;
+
+    report_error(w, for_stmt->range_expression->location, "Expected an array but got %s.",
+        type_to_string(for_stmt->range_expression->inferred_type));
 }
 
 void typecheck_return(Workspace *w, Ast_Return *ret)
@@ -1223,6 +1265,9 @@ void typecheck_assignment(Workspace *w, Ast_Assignment *assign)
         if (ident->resolved_declaration->flags & DECLARATION_IS_CONSTANT) {
             report_error(w, ident->_expression.location, "Cannot assign to constant.");
         }
+        if (ident->resolved_declaration->flags & DECLARATION_IS_FOR_LOOP_ITERATOR) {
+            report_error(w, ident->_expression.location, "Cannot assign to iterator.");
+        }
 
         goto end;
     }
@@ -1232,6 +1277,7 @@ void typecheck_assignment(Workspace *w, Ast_Assignment *assign)
 
     Ast_Type_Definition *defn = assign->pointer->inferred_type;
 
+    // TODO: @Cleanup: How we determine what is an "lvalue".
     if (assign->pointer->kind != AST_SELECTOR && defn->kind != TYPE_DEF_POINTER) {
         if (assign->pointer->kind == AST_BINARY_OPERATOR && ((Ast_Binary_Operator *)(assign->pointer))->operator_type == TOKEN_ARRAY_SUBSCRIPT) {
             goto end;
@@ -1240,11 +1286,6 @@ void typecheck_assignment(Workspace *w, Ast_Assignment *assign)
     }
     
 end:
-    if (assign->operator_type != '=') {
-        typecheck_binary_arithmetic(w, assign->operator_type, assign->pointer->location, assign->pointer, assign->value);
-        return;
-    }
-    
     if (!check_that_types_match(w, assign->value, assign->pointer->inferred_type)) {
         report_error(w, assign->value->location, "Type mismatch: Wanted %s but got %s.",
             type_to_string(assign->pointer->inferred_type), type_to_string(assign->value->inferred_type));
@@ -1258,6 +1299,7 @@ void typecheck_statement(Workspace *w, Ast_Statement *stmt)
     case AST_BLOCK:                break; // Do nothing, our members should have compiled first.
     case AST_WHILE:                typecheck_while(w, xx stmt); break;
     case AST_IF:                   typecheck_if(w, xx stmt); break;
+    case AST_FOR:                  typecheck_for(w, xx stmt); break;
     case AST_LOOP_CONTROL:         break;
     case AST_RETURN:               typecheck_return(w, xx stmt); break;
     case AST_USING:                typecheck_using(w, xx stmt); break;
@@ -1379,7 +1421,12 @@ void flatten_stmt_for_typechecking(Ast_Declaration *root, Ast_Statement *stmt)
         if (if_stmt->else_statement) flatten_stmt_for_typechecking(root, if_stmt->else_statement);
         break;
     }
-    // case AST_FOR:
+    case AST_FOR: {
+        Ast_For *for_stmt = xx stmt;
+        flatten_expr_for_typechecking(root, for_stmt->range_expression);
+        flatten_stmt_for_typechecking(root, for_stmt->then_statement);
+        break;
+    }
     case AST_LOOP_CONTROL:
         break;
     case AST_RETURN: {

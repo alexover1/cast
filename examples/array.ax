@@ -4,42 +4,33 @@ array_test :: () {
 	format := "The array at %p has %lld elements\n";
 	printf(format.data, *array, array.count);
 
-	i: u64 = 0;
-	while i < array.count {
-		array[i] = i * 2;
-		i += 1;
-	}
-
 	format = "%p: %lld\n";
-	printf(format.data, *array[0], array[0]);
-	printf(format.data, *array[1], array[1]);
-	printf(format.data, *array[2], array[2]);
-	printf(format.data, *array[3], array[3]);
-	printf(format.data, *array[4], array[4]);
+
+	for 0..array.count-1 {
+		array[it] = (it * 3) as u64;
+		printf(format.data, *array[it], array[it]);
+	}
 }
 
 slice_test :: () {
 	array: [5] u64;
 
-	i: u64 = 0;
-	while i < array.count {
-		array[i] = i * 2;
-		i += 1;
+	for 0..array.count-1 {
+		array[it] = (it * 3) as u64;
 	}
-	
+
 	slice: [] u64;
 	slice.data = *array[0];
 	slice.count = array.count;
-	
-	slice[0] = 10;
-	
-	format := "%lld\n";
-	printf(format.data, slice[0]);
-	printf(format.data, slice[1]);
-	printf(format.data, slice[2]);
-	printf(format.data, slice[3]);
-	printf(format.data, slice[4]);
 
+	slice[2] = 10;
+
+	format := "%lld\n";
+
+	for 0..array.count-1 {
+		printf(format.data, slice[it]);
+	}
+	
 	format = "The sum of the array is %lld\n";
 	printf(format.data, sum(slice));
 }
