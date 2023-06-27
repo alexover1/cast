@@ -1505,19 +1505,27 @@ bool check_that_types_match(Workspace *w, Ast_Expression *expr, Ast_Type_Definit
     // Strings can be converted to integers if they are exactly one character.
     if (expr->kind == AST_LITERAL) {
         Ast_Literal *literal = xx expr;
-        if (literal->kind == LITERAL_STRING && (type->kind == TYPE_DEF_NUMBER && !(type->number.flags & NUMBER_FLAGS_FLOAT))) {
-            if (literal->string_value.count != 1) {
-                report_error(w, expr->location, "Strings can only convert to integers if they are exactly one character.");
+
+        if (literal->kind == LITERAL_STRING) {
+            if ((type->kind == TYPE_DEF_NUMBER && !(type->number.flags & NUMBER_FLAGS_FLOAT))) {
+                if (literal->string_value.count != 1) {
+                    report_error(w, expr->location, "Strings can only convert to integers if they are exactly one character.");
+                }
+
+                Ast_Number *char_literal = context_alloc(sizeof(*char_literal));
+                char_literal->_expression.kind = AST_NUMBER;
+                char_literal->_expression.location = expr->location;
+                char_literal->_expression.inferred_type = type;
+                char_literal->as.integer = *literal->string_value.data;
+
+                expr->replacement = xx char_literal;
+                return true;
             }
 
-            Ast_Number *char_literal = context_alloc(sizeof(*char_literal));
-            char_literal->_expression.kind = AST_NUMBER;
-            char_literal->_expression.location = expr->location;
-            char_literal->_expression.inferred_type = type;
-            char_literal->as.integer = *literal->string_value.data;
-
-            expr->replacement = xx char_literal;
-            return true;
+            if (type->kind == TYPE_DEF_POINTER && type->pointer_to == w->type_def_u8) {
+                expr->inferred_type = type;
+                return true;
+            }
         }
     }
 

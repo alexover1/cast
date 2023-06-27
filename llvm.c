@@ -282,21 +282,14 @@ LLVMValueRef llvm_const_string(Llvm llvm, const char *data, size_t count)
     // Create the array and *u8 types.
     LLVMTypeRef u8_type = LLVMInt8TypeInContext(llvm.context);
     LLVMTypeRef array_type = LLVMArrayType(u8_type, count);
-    LLVMTypeRef u8_pointer_type = LLVMPointerType(u8_type, 0);
-
+    LLVMTypeRef pointer_type = LLVMPointerTypeInContext(llvm.context, 0);
+    
     // Create global variable with the array of characters.
     LLVMValueRef global_string = LLVMAddGlobal(llvm.module, array_type, "");
     LLVMSetLinkage(global_string, LLVMPrivateLinkage);
     LLVMSetInitializer(global_string, LLVMConstStringInContext(llvm.context, data, count, DONT_ZERO_TERMINATE));
 
-    // Create constant structure value.
-    LLVMValueRef struct_fields[] = {
-        LLVMConstBitCast(global_string, u8_pointer_type),
-        LLVMConstInt(LLVMInt64TypeInContext(llvm.context), count, 0),
-    };
-            
-    return LLVMConstStructInContext(llvm.context,
-        struct_fields, sizeof(struct_fields)/sizeof(struct_fields[0]), USE_STRUCT_PACKING);
+    return LLVMConstBitCast(global_string, pointer_type);
 }
 
 LLVMValueRef llvm_build_pointer(Workspace *w, Ast_Expression *expr)
@@ -464,9 +457,26 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
         const Ast_Literal *lit = xx expr;           
         LLVMTypeRef type = llvm_get_type(w, expr->inferred_type);
         switch (lit->kind) {
-        case LITERAL_BOOL:   return LLVMConstInt(LLVMInt1TypeInContext(llvm.context), lit->bool_value, 0);
-        case LITERAL_STRING: return llvm_const_string(llvm, lit->string_value.data, lit->string_value.count);
-        case LITERAL_NULL:   return LLVMConstNull(type);
+        case LITERAL_BOOL: return LLVMConstInt(LLVMInt1TypeInContext(llvm.context), lit->bool_value, 0);
+        case LITERAL_NULL: return LLVMConstNull(type);
+
+        case LITERAL_STRING: {
+            LLVMValueRef string_data_pointer = llvm_const_string(llvm, lit->string_value.data, lit->string_value.count);
+                    
+            if (expr->inferred_type == w->type_def_string) {
+                // Create constant structure value.
+                LLVMValueRef struct_fields[] = {
+                    string_data_pointer,
+                    LLVMConstInt(LLVMInt64TypeInContext(llvm.context), lit->string_value.count, 0),
+                };
+            
+                return LLVMConstStructInContext(llvm.context,
+                    struct_fields, sizeof(struct_fields)/sizeof(struct_fields[0]), USE_STRUCT_PACKING);
+            }
+
+            // If we are not inferred to be string, we must be *u8.
+            return string_data_pointer;
+        }
         }
     }
     case AST_IDENT: {

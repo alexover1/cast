@@ -1,14 +1,11 @@
 array_test :: () {
 	array: [5] int;
 
-	format := "The array at %p has %lld elements\n";
-	printf(format.data, *array, array.count);
-
-	format = "%p: %lld\n";
+	printf("The array at %p has %lld elements\n", *array, array.count);
 
 	for 0..array.count-1 {
 		array[it] = (it+1) * 3;
-		printf(format.data, *array[it], array[it]);
+		printf("%p: %lld\n", *array[it], array[it]);
 	}
 }
 
@@ -25,14 +22,11 @@ slice_test :: () {
 
 	slice[2] = 10;
 
-	format := "%lld\n";
-
 	for 0..array.count-1 {
-		printf(format.data, slice[it]);
+		printf("%lld\n", slice[it]);
 	}
 	
-	format = "The sum of the array is %lld\n";
-	printf(format.data, sum(slice));
+	printf("The sum of the array is %lld\n", sum(slice));
 }
 
 struct_packing :: () {
@@ -61,8 +55,8 @@ struct_packing :: () {
 }
 
 main :: () -> int {
-	// array_test();
-	// slice_test();
+	array_test();
+	slice_test();
 	struct_packing();
 	return 0;
 }
