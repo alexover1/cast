@@ -33,31 +33,9 @@ slice_test :: () {
 	printf("The sum of the array is %lld\n", sum(slice));
 }
 
-struct_packing :: () {
-	printf("====================\n");
-
-	My_Struct :: struct {
-		byte: u8;
-		width: u32;
-		height: u64;
-	}
-
-	// 0xaa, 0xcafe, 0xc8
-	my_struct := My_Struct.{170, 51966, 200};
-
-	packed_array := pack_struct((*my_struct) as *u8, 16); // TODO: size_of
-
-	printf("Packed:\n");
-	for 0..packed_array.count-1 {
-		format := "  0x%llx\n";
-		printf(format.data, packed_array[it]);
-	}
-}
-
 main :: () -> int {
-	// array_test();
-	// slice_test();
-	struct_packing();
+	array_test();
+	slice_test();
 	return 0;
 }
 
@@ -68,29 +46,6 @@ sum :: (array: [] int) -> int {
 	}
 	return sum;
 }
-
-pack_struct :: (input: *u8, input_size: u64) -> []u64 {
-	words := (input_size + 7) / 8;
-
-	printf("Needs at least %lld words\n", words);
-
-	output: []u64;
-	output.data = malloc(words * 8) as *u64;
-	output.count = words as int;
-
-	for 0..input_size-1 {
-		array_index := it / 8;
-		bit_index := (it*8) % 64;
-		next_word := (input + it).* as u64;
-		mask := next_word << bit_index as u64;
-		output[array_index] |= mask;
-
-		printf("array_index = %lld, bit_index = %lld, next_word = %llu, mask = %llu\n", array_index, bit_index, next_word, mask);
-	}
-
-	return output;
-}
-
 print_binary :: (number: u64) {
 	if number >> 1 {
 		print_binary(number >> 1);
