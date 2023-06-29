@@ -64,7 +64,7 @@ struct Ast_Expression {
 
     // @Volatile: Both of these are set during type-checking.
     Ast_Type_Definition *inferred_type;
-    Ast_Expression *replacement;
+    // Ast_Expression *replacement;
 };
 
 typedef enum {
@@ -378,7 +378,7 @@ enum {
 
 // This is so we can store a flattened list of nodes for typechecking.
 struct Ast_Node {
-    Ast_Expression *expression;
+    Ast_Expression **expression;
     Ast_Statement *statement;
 };
 

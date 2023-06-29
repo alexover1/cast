@@ -16,9 +16,18 @@ extern Arena *context_arena;
 void *context_alloc(size_t size);
 void *context_realloc(void *oldptr, size_t oldsz, size_t newsz);
 
-// TEMPORARY STRING ALLOCATION
+// TEMPORARY ALLOCATION
 
 extern Arena temporary_arena;
+
+void *temp_alloc(size_t size);
+#define temp_reset() arena_reset(&temporary_arena)
+
+#ifdef NDEBUG
+#define temp_free(oldptr, oldsz)
+#else
+#define temp_free(oldptr, oldsz) memset(oldptr, 0xef, oldsz)
+#endif
 
 char *tprint(const char *fmt, ...);
 char *vtprint(const char *fmt, va_list args);
@@ -26,6 +35,8 @@ char *vtprint(const char *fmt, va_list args);
 #endif // CONTEXT_ALLOC_H_
 
 #ifdef CONTEXT_ALLOC_IMPLEMENTATION
+
+#include "stb_sprintf.h"
 
 void *context_alloc(size_t size)
 {
@@ -41,7 +52,12 @@ void *context_realloc(void *oldptr, size_t oldsz, size_t newsz)
     return arena_realloc(context_arena, oldptr, oldsz, newsz);
 }
 
-#include "stb_sprintf.h"
+inline void *temp_alloc(size_t size)
+{
+    void *result = arena_alloc(&temporary_arena, size);
+    memset(result, 0, size);
+    return result;
+}
 
 char *tprint(const char *fmt, ...)
 {

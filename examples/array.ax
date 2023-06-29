@@ -1,4 +1,6 @@
 array_test :: () {
+	printf("====================\n");
+
 	array: [5] int;
 
 	printf("The array at %p has %lld elements\n", *array, array.count);
@@ -10,6 +12,8 @@ array_test :: () {
 }
 
 slice_test :: () {
+	printf("====================\n");
+
 	array: [5] int;
 
 	for 0..array.count-1 {
@@ -30,6 +34,8 @@ slice_test :: () {
 }
 
 struct_packing :: () {
+	printf("====================\n");
+
 	My_Struct :: struct {
 		byte: u8;
 		width: u32;
@@ -39,24 +45,18 @@ struct_packing :: () {
 	// 0xaa, 0xcafe, 0xc8
 	my_struct := My_Struct.{170, 51966, 200};
 
-	packed_array: [2] u64;
+	packed_array := pack_struct((*my_struct) as *u8, 16); // TODO: size_of
 
-	// Note: Once we have implicit array to slice this will go away.
-	slice: [] u64;
-	slice.data = *packed_array[0];
-	slice.count = packed_array.count;
-
-	pack_struct((*my_struct) as *u8, 13, slice); // TODO: size_of
-
+	printf("Packed:\n");
 	for 0..packed_array.count-1 {
-		format := "0x%llx\n";
+		format := "  0x%llx\n";
 		printf(format.data, packed_array[it]);
 	}
 }
 
 main :: () -> int {
-	array_test();
-	slice_test();
+	// array_test();
+	// slice_test();
 	struct_packing();
 	return 0;
 }
@@ -69,20 +69,40 @@ sum :: (array: [] int) -> int {
 	return sum;
 }
 
-pack_struct :: (input: *u8, input_size: int, output: []u64) {
-    output_index: u64 = 0;
+pack_struct :: (input: *u8, input_size: u64) -> []u64 {
+	words := (input_size + 7) / 8;
 
-    cursor := input;
-    end := input + input_size;
+	printf("Needs at least %lld words\n", words);
 
-    while cursor < end {
-        array_index := output_index / 64;
-        bit_index := output_index % 64;
-        mask := cursor.* as u64 << bit_index;
-        output[array_index] |= mask;
-        output_index += 8;
-		cursor += 1;
-    }
+	output: []u64;
+	output.data = malloc(words * 8) as *u64;
+	output.count = words as int;
+
+	for 0..input_size-1 {
+		array_index := it / 8;
+		bit_index := (it*8) % 64;
+		next_word := (input + it).* as u64;
+		mask := next_word << bit_index as u64;
+		output[array_index] |= mask;
+
+		printf("array_index = %lld, bit_index = %lld, next_word = %llu, mask = %llu\n", array_index, bit_index, next_word, mask);
+	}
+
+	return output;
+}
+
+print_binary :: (number: u64) {
+	if number >> 1 {
+		print_binary(number >> 1);
+	}
+	if number & 1  putchar("1")
+	else           putchar("0");
 }
 
 printf :: (format: *u8, ..) #foreign;
+putchar :: (char: u8) #foreign;
+
+malloc :: (size: u64) -> *void #foreign;
+free :: (pointer: *void) #foreign;
+calloc :: (count: u64, member_size: u64) -> *void #foreign;
+realloc :: (pointer: *void, new_size: u64) -> *void #foreign;

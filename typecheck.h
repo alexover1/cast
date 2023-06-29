@@ -64,17 +64,21 @@ typedef struct {
     int64_t element_count; // -1 for slice
 } Type_Info_Array;
 
+bool run_typecheck_queue(Workspace *w, Ast_Declaration *decl);
 void typecheck_declaration(Workspace *w, Ast_Declaration *decl);
 
 void typecheck_number(Workspace *w, Ast_Number *number, Ast_Type_Definition *supplied_type);
 void typecheck_literal(Workspace *w, Ast_Literal *literal);
-void typecheck_identifier(Workspace *w, Ast_Ident *ident);
+void typecheck_identifier(Workspace *w, Ast_Ident **ident);
 void typecheck_unary_operator(Workspace *w, Ast_Unary_Operator *unary);
-void typecheck_binary_operator(Workspace *w, Ast_Binary_Operator *binary);
+void typecheck_binary_operator(Workspace *w, Ast_Binary_Operator **binary);
 void typecheck_lambda(Workspace *w, Ast_Lambda *lambda);
 void typecheck_procedure_call(Workspace *w, Ast_Procedure_Call *call);
-void typecheck_definition(Workspace *w, Ast_Type_Definition *defn);
-void typecheck_expression(Workspace *w, Ast_Expression *expression);
+void typecheck_definition(Workspace *w, Ast_Type_Definition **type);
+void typecheck_instantiation(Workspace *w, Ast_Type_Instantiation **inst);
+void typecheck_cast(Workspace *w, Ast_Cast *cast);
+void typecheck_selector(Workspace *w, Ast_Selector **selector);
+void typecheck_expression(Workspace *w, Ast_Expression **expression);
 
 void typecheck_while(Workspace *w, Ast_While *while_stmt);
 void typecheck_if(Workspace *w, Ast_If *if_stmt);
@@ -87,16 +91,17 @@ void typecheck_statement(Workspace *w, Ast_Statement *statement);
 Ast_Expression *generate_default_value_for_type(Workspace *w, Ast_Type_Definition *type);
 Ast_Expression *autocast_to_bool(Workspace *w, Ast_Expression *expr);
 Ast_Expression *constant_arithmetic_or_comparison(Workspace *w, Ast_Binary_Operator *binary);
+
 Ast_Type_Definition *typecheck_binary_int_operator(Workspace *w, Ast_Binary_Operator *binary);
 Ast_Type_Definition *typecheck_binary_arithmetic(Workspace *w, Ast_Binary_Operator *binary);
 void typecheck_selector_on_string(Workspace *w, Ast_Selector *selector);
-void typecheck_selector_on_array(Workspace *w, Ast_Selector *selector, Ast_Type_Definition *defn);
+void typecheck_selector_on_array(Workspace *w, Ast_Selector **selector, Ast_Type_Definition *defn);
 
-void flatten_expr_for_typechecking(Ast_Declaration *root, Ast_Expression *expr);
+void flatten_expr_for_typechecking(Ast_Declaration *root, Ast_Expression **expr);
 void flatten_stmt_for_typechecking(Ast_Declaration *root, Ast_Statement *stmt);
 void flatten_decl_for_typechecking(Ast_Declaration *decl);
 
-bool check_that_types_match(Workspace *w, Ast_Expression *expr, Ast_Type_Definition *type);
+bool check_that_types_match(Workspace *w, Ast_Expression **expr, Ast_Type_Definition *type);
 bool types_are_equal(Ast_Type_Definition *x, Ast_Type_Definition *y);
 
 Ast_Literal *make_literal(Literal_Kind kind);

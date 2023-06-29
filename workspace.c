@@ -139,8 +139,8 @@ void workspace_typecheck(Workspace *w)
             Ast_Node node = decl->flattened[it];
             sb_append_cstr(&sb, ">>> ");
             if (node.expression) {
-                sb_print(&sb, "[%d] ", node.expression->kind);
-                print_expr_to_builder(&sb, node.expression, 0);
+                sb_print(&sb, "[%d] ", (*node.expression)->kind);
+                print_expr_to_builder(&sb, *node.expression, 0);
             }
             if (node.statement)  print_stmt_to_builder(&sb, node.statement, 0);
             sb_append_cstr(&sb, "\n");

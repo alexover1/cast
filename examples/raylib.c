@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include <raylib.h>
 #include <llvm-c/Core.h>
@@ -24,20 +25,15 @@
   ((byte) & 0x02 ? '1' : '0'), \
   ((byte) & 0x01 ? '1' : '0') 
 
-void pack_struct(const void *input, size_t input_size, uint64_t *output, size_t output_size)
+void pack_struct(const uint8_t *input, size_t input_size, uint64_t *output, size_t output_size)
 {
-    size_t output_index = 0;
-
-    const uint8_t *cursor = input;
-    const uint8_t *end = (uint8_t*)input + input_size;
-
-    while (cursor < end) {
-        const size_t output_array_index = output_index / PACKING_BIT_SIZE;
-        const size_t output_bit_index = output_index % PACKING_BIT_SIZE;
-        uint64_t mask = ((uint64_t)*cursor) << output_bit_index;
+    for (size_t i = 0; i < input_size; ++i) {
+        const size_t output_array_index = i / 8;
+        const size_t output_bit_index = (i*8) % PACKING_BIT_SIZE;
+        uint64_t next_word = input[i];
+        uint64_t mask = next_word << output_bit_index;
+        printf("array_index = %zu, bit_index = %zu, next_word = %llu, mask = %llu\n", output_array_index, output_bit_index, next_word, mask);
         output[output_array_index] |= mask;
-        output_index += 8;
-        cursor += 1;
     }
 }
 
@@ -194,17 +190,17 @@ int main2(void)
 }
 
 typedef struct {
-    uint8_t xs[8];
-    uint64_t foo;
-    uint8_t bar;
+    uint8_t byte;
+    uint32_t width;
+    uint64_t height;
 } Foobar;
 
 int main(void)
 {
-    Foobar foo = {0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0xaa, 0xbb, 0xcafebabecafebabe, 0xab};
+    Foobar foo = {0xaa, 0xcafe, 200};
     uint64_t packed[8] = {0};
 
-    pack_struct(&foo, sizeof(foo), packed, ARRAY_LEN(packed));
+    pack_struct((uint8_t *) &foo, sizeof(foo), packed, ARRAY_LEN(packed));
 
     for (size_t i = 0; i < ARRAY_LEN(packed); ++i) {
         printf("packed[%zu]: %llx\n", i, packed[i]);

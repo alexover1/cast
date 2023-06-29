@@ -1,0 +1,9 @@
+main :: () {
+    array: [5] u64;
+
+    printf("%lld\n", array.count);
+
+    for 0..array.count-1  0;
+}
+
+printf :: (format: *u8, ..) #foreign;

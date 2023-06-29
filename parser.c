@@ -43,8 +43,21 @@ static inline Ast_Type_Definition *make_type_definition(Parser *p, Source_Locati
 {
     Ast_Type_Definition *defn = ast_alloc(p, loc, AST_TYPE_DEFINITION, sizeof(*defn));
     defn->kind = kind;
+    defn->size = -1;
     // defn->_expression.inferred_type = p->workspace->type_def_type;
     return defn;
+}
+
+static Source_Location location_info_begin_end(Source_Location begin, Source_Location end)
+{
+    assert(begin.fid == end.fid);
+    Source_Location loc;
+    loc.fid = begin.fid;
+    loc.c0 = begin.c0;
+    loc.l0 = begin.l0;
+    loc.c1 = end.c1;
+    loc.l1 = end.l1;
+    return loc;
 }
 
 static int operator_precedence_from_token_type(int type)
@@ -189,6 +202,7 @@ Ast_Expression *parse_binary_expression(Parser *p, Ast_Expression *left, int pre
         bin->left = left;
         bin->operator_type = token.type;
         bin->right = parse_binary_expression(p, NULL, token_precedence + 1);
+        bin->_expression.location = location_info_begin_end(bin->left->location, bin->right->location);
         left = xx bin;
     }
 
@@ -254,7 +268,8 @@ Ast_Expression *parse_primary_expression(Parser *p, Ast_Expression *base)
                 break;
             }
             case TOKEN_IDENT: {
-                Ast_Selector *selector = ast_alloc(p, token.location, AST_SELECTOR, sizeof(*selector));
+                Source_Location loc = location_info_begin_end(base->location, token.location);
+                Ast_Selector *selector = ast_alloc(p, loc, AST_SELECTOR, sizeof(*selector));
                 selector->namespace_expression = base;
                 selector->ident = make_identifier(p, token);
                 selector->struct_field_index = -1;
@@ -274,6 +289,7 @@ Ast_Expression *parse_primary_expression(Parser *p, Ast_Expression *base)
             binary->left = base;
             binary->operator_type = TOKEN_ARRAY_SUBSCRIPT;
             binary->right = parse_expression(p);
+            binary->_expression.location = location_info_begin_end(binary->left->location, binary->right->location);
             base = xx binary;
             eat_token_type(p, ']', "Missing closing bracket after array subscript.");
             break;
@@ -941,6 +957,8 @@ Ast_Statement *parse_for_statement(Parser *p)
         binary->operator_type = token.type;
         binary->right = parse_expression(p);
         if (!binary->right) return NULL;
+        binary->_expression.location = location_info_begin_end(binary->left->location, binary->right->location);
+        
         for_stmt->range_expression = xx binary;
     }
 
@@ -1028,6 +1046,7 @@ Ast_Statement *parse_assignment(Parser *p, Ast_Expression *pointer_expression)
         binary->left = pointer_expression;
         binary->operator_type = token.type - 400;
         binary->right = rhs;
+        binary->_expression.location = location_info_begin_end(binary->left->location, binary->right->location);
 
         assign->value = xx binary;
     } else {
@@ -1464,7 +1483,6 @@ const char *stmt_to_string(Ast_Statement *stmt)
 void print_expr_to_builder(String_Builder *sb, const Ast_Expression *expr, size_t depth)
 {
     if (!expr) return;
-    while (expr->replacement) expr = expr->replacement;
     switch (expr->kind) {
     case AST_NUMBER: {
         const Ast_Number *number = xx expr;
@@ -1726,6 +1744,11 @@ void print_decl_to_builder(String_Builder *sb, const Ast_Declaration *decl, size
     }
     
     if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) {
+        if (decl->flags & DECLARATION_IS_FOREIGN) {
+            sb_append_cstr(sb, "#foreign");
+            return;
+        }
+        
         sb_append_cstr(sb, "<lambda body> ");
         print_stmt_to_builder(sb, xx decl->my_block, depth);
         return;

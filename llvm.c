@@ -148,7 +148,7 @@ LLVMTypeRef llvm_get_type(Workspace *w, const Ast_Type_Definition *defn)
 {
     Llvm llvm = w->llvm;
     assert(defn);
-    while (defn->_expression.replacement) defn = xx defn->_expression.replacement; // TODO: We should store ** in the typechecker so this goes away.
+    // while (defn->_expression.replacement) defn = xx defn->_expression.replacement; // TODO: We should store ** in the typechecker so this goes away.
     switch (defn->kind) {
     case TYPE_DEF_NUMBER:
         if (defn->number.flags & NUMBER_FLAGS_FLOAT) {
@@ -207,7 +207,7 @@ LLVMTypeRef llvm_get_type(Workspace *w, const Ast_Type_Definition *defn)
         size_t arg_count = arrlenu(defn->lambda.argument_types);
         LLVMTypeRef *param_types = arena_alloc(&temporary_arena, sizeof(LLVMTypeRef) * arg_count);
         For (defn->lambda.argument_types) {
-            Replace_Type(defn->lambda.argument_types[it]);
+            // Replace_Type(defn->lambda.argument_types[it]);
             // if (defn->lambda.argument_types[it]->kind == TYPE_DEF_STRUCT) {
             //     assert(defn->size >= 0);
             //     const int num_i64s = (defn->size + 7) / 8;
@@ -302,7 +302,8 @@ LLVMOpcode llvm_get_opcode(int operator_type, Ast_Type_Definition *defn, LLVMInt
     case TOKEN_SHIFT_LEFT:
         return LLVMShl;
     case TOKEN_SHIFT_RIGHT:
-        return LLVMAShr; // TODO: check this.
+        if (defn->number.flags & NUMBER_FLAGS_SIGNED) return LLVMAShr;
+        return LLVMLShr;
     default:
         printf("Unhandled binary operator type: %s\n", token_type_to_string(operator_type));
         assert(0);
@@ -344,7 +345,7 @@ LLVMValueRef llvm_const_string(Llvm llvm, const char *data, size_t count)
 LLVMValueRef llvm_build_pointer(Workspace *w, Ast_Expression *expr)
 {
     Llvm llvm = w->llvm;
-    while (expr->replacement) expr = expr->replacement;
+    // while (expr->replacement) expr = expr->replacement;
     switch (expr->kind) {
     case AST_IDENT: {
         const Ast_Ident *ident = xx expr;          
@@ -493,7 +494,7 @@ LLVMValueRef llvm_pack_struct_into_i64_array(LLVMBuilderRef builder, LLVMValueRe
 LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
 {
     Llvm llvm = w->llvm;
-    while (expr->replacement) expr = expr->replacement;
+    // while (expr->replacement) expr = expr->replacement;
     switch (expr->kind) {
     case AST_NUMBER: {
         const Ast_Number *number = xx expr;
@@ -714,14 +715,15 @@ void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *st
         LLVMValueRef condition = llvm_build_expression(w, if_stmt->condition_expression);
 
         LLVMBasicBlockRef basic_block_then = LLVMAppendBasicBlock(function, "then");
-        LLVMBasicBlockRef basic_block_else;
-        LLVMBasicBlockRef basic_block_merge = LLVMAppendBasicBlock(function, "merge");
+        LLVMBasicBlockRef basic_block_else, basic_block_merge;
 
         // Emit the conditional break.
         if (if_stmt->else_statement) {
             basic_block_else = LLVMAppendBasicBlock(function, "else");
             LLVMBuildCondBr(llvm.builder, condition, basic_block_then, basic_block_else);
+            basic_block_merge = LLVMAppendBasicBlock(function, "merge");
         } else {
+            basic_block_merge = LLVMAppendBasicBlock(function, "merge");
             LLVMBuildCondBr(llvm.builder, condition, basic_block_then, basic_block_merge);
         }
         
@@ -736,7 +738,9 @@ void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *st
         if (if_stmt->else_statement) {
             LLVMPositionBuilderAtEnd(llvm.builder, basic_block_else);
             llvm_build_statement(w, function, if_stmt->else_statement);
-            LLVMBuildBr(llvm.builder, basic_block_merge);
+            if (LLVMGetBasicBlockTerminator(basic_block_else) == NULL) {
+                LLVMBuildBr(llvm.builder, basic_block_merge);
+            }
         }
 
         // Emit code for the merge block.
@@ -786,7 +790,7 @@ void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *st
         break;
     }
     case AST_LOOP_CONTROL: {
-        
+        UNIMPLEMENTED;
     }
     case AST_RETURN: {
         const Ast_Return *ret = xx stmt;
