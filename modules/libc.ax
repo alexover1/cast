@@ -1,9 +1,11 @@
 // libc bindings for ax.
 
-printf :: (format: *u8, ..) #foreign;
-puts :: (s: *u8) -> int #foreign;
-putchar :: (c: s32) -> int #foreign;
-exit :: (status: s32) #foreign;
+libc :: #system_library "c";
+
+printf :: (format: *u8, ..) #foreign libc;
+puts :: (s: *u8) -> int #foreign libc;
+putchar :: (c: s32) -> int #foreign libc;
+exit :: (status: s32) #foreign libc;
 
 print_integer :: (x_: s32) {
     x := x_;

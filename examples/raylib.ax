@@ -4,12 +4,9 @@ main :: () -> int {
     InitWindow(800, 600, title.data);
     SetTargetFPS(60);
 
-    bg := color_to_u64(RL_DARKBLUE);
-    fg := color_to_u64(RL_LIME);
+    bg := RL_DARKBLUE;
+    fg := RL_LIME;
 
-    // v := GetMonitorPosition(GetCurrentMonitor());
-    // printf("%d, %d\n", v.x, v.y);
-    
     while !WindowShouldClose() {
         BeginDrawing();
         ClearBackground(bg);

@@ -89,7 +89,20 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
     
     // We are done typechecking our members.
 
-    if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) goto done;
+    if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) {
+        Ast_Lambda *lambda = xx decl->root_expression;
+        if (lambda->foreign_library_name) {
+            assert(lambda->foreign_library_name->resolved_declaration);
+            if (!lambda->foreign_library_name->resolved_declaration->my_import) {
+                report_info(w, lambda->foreign_library_name->resolved_declaration->location, "Here is the declaration.");
+                report_error(w, lambda->foreign_library_name->_expression.location, "Expected a library but got %s.",
+                    type_to_string(lambda->foreign_library_name->resolved_declaration->my_type));
+            }
+        }
+        goto done;
+    }
+
+    if (decl->my_import) goto done;
 
     if (decl->flags & DECLARATION_IS_CONSTANT) {
         if (!decl->root_expression) {
@@ -386,6 +399,12 @@ void typecheck_identifier(Workspace *w, Ast_Ident **ident)
     }
 
     Ast_Declaration *decl = (*ident)->resolved_declaration;
+
+    if (decl->my_import) {
+        // We don't want to substitute ourselves.
+        (*ident)->_expression.inferred_type = w->type_def_int; // @Junk.
+        return;
+    }
 
     // This is where we might hit a roadblock.
     // If the declaration we point at has not been typechecked, and it's a constant, we have to wait.
@@ -1543,7 +1562,13 @@ void flatten_stmt_for_typechecking(Ast_Declaration *root, Ast_Statement *stmt)
 void flatten_decl_for_typechecking(Ast_Declaration *decl)
 {
     if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) {
-        if (decl->flags & DECLARATION_IS_FOREIGN) return; // Nothing to typecheck.
+        Ast_Lambda *lambda = xx decl->root_expression;
+
+        if (lambda->foreign_library_name) {
+            flatten_expr_for_typechecking(decl, xx &lambda->foreign_library_name); // @Volatile: This would not work if we try to substitute the identifier.
+            return;
+        }
+         
         flatten_stmt_for_typechecking(decl, xx decl->my_block->parent); // Arguments.
         flatten_stmt_for_typechecking(decl, xx decl->my_block);
         return;

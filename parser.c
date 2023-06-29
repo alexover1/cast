@@ -412,7 +412,7 @@ Ast_Expression *parse_base_expression(Parser *p)
         {
             Ast_Type_Definition *lambda_type = parse_lambda_type(p);
             token = peek_next_token(p);
-            if (token.type == '{' || token.type == '#') return xx parse_lambda_definition(p, lambda_type);
+            if (token.type == '{' || token.type == TOKEN_DIRECTIVE_FOREIGN) return xx parse_lambda_definition(p, lambda_type);
             return xx lambda_type;
         }
         }
@@ -439,26 +439,22 @@ Ast_Lambda *parse_lambda_definition(Parser *p, Ast_Type_Definition *lambda_type)
 {
     if (!lambda_type) lambda_type = parse_lambda_type(p);
 
-    if (peek_next_token(p).type == '#') {
-        eat_next_token(p);
-        if (isalpha(peek_character(p))) {
-            Token token = eat_token_type(p, TOKEN_IDENT, "Expected an identifier because we parsed an alphabetic character after '#'.");
+    if (peek_next_token(p).type == TOKEN_DIRECTIVE_FOREIGN) {
+        Token token = eat_next_token(p);
+        token = eat_token_type(p, TOKEN_IDENT, "Expected an identifier after #foreign."); // TODO: error message
 
-            if (sv_eq(token.string_value, sv_from_cstr("foreign"))) {
-                // TODO: parse an identifier with which library the declaration is from.
-                Ast_Lambda *lambda = ast_alloc(p, lambda_type->_expression.location, AST_LAMBDA, sizeof(*lambda));
-                lambda->type_definition = lambda_type;
-                lambda->my_body_declaration = make_declaration(p, token.location);
-                lambda->my_body_declaration->flags = DECLARATION_IS_CONSTANT | DECLARATION_IS_PROCEDURE_BODY | DECLARATION_IS_FOREIGN;
-                lambda->my_body_declaration->my_type = lambda_type;
-                lambda->is_foreign = true;
-                Exit_Block(p, lambda_type->lambda.arguments_block);
-                return lambda;
-            }
+        if (p->reported_error) return NULL;
 
-            parser_report_error(p, token.location, "Unknown directive '"SV_Fmt"'.", SV_Arg(token.string_value));
-            return NULL;
-        }
+        // TODO: parse an identifier with which library the declaration is from.
+        Ast_Lambda *lambda = ast_alloc(p, lambda_type->_expression.location, AST_LAMBDA, sizeof(*lambda));
+        lambda->type_definition = lambda_type;
+        lambda->my_body_declaration = make_declaration(p, lambda_type->_expression.location);
+        lambda->my_body_declaration->root_expression = xx lambda;
+        lambda->my_body_declaration->flags = DECLARATION_IS_CONSTANT | DECLARATION_IS_PROCEDURE_BODY | DECLARATION_IS_FOREIGN;
+        lambda->my_body_declaration->my_type = lambda_type;
+        lambda->foreign_library_name = make_identifier(p, token);
+        Exit_Block(p, lambda_type->lambda.arguments_block);
+        return lambda;
     }
 
     Token token = eat_token_type(p, '{', "Expected opening curly brace after lambda type.");
@@ -468,6 +464,7 @@ Ast_Lambda *parse_lambda_definition(Parser *p, Ast_Type_Definition *lambda_type)
     lambda->my_body_declaration = make_declaration(p, token.location);
     lambda->my_body_declaration->flags = DECLARATION_IS_CONSTANT | DECLARATION_IS_PROCEDURE_BODY;
     lambda->my_body_declaration->my_type = lambda_type;
+    lambda->my_body_declaration->root_expression = xx lambda;
     lambda->my_body_declaration->my_block = ast_alloc(p, token.location, AST_BLOCK, sizeof(Ast_Block));
     lambda->my_body_declaration->my_block->belongs_to = BLOCK_BELONGS_TO_LAMBDA;
     lambda->my_body_declaration->my_block->belongs_to_data = lambda;
@@ -1056,37 +1053,6 @@ Ast_Statement *parse_assignment(Parser *p, Ast_Expression *pointer_expression)
     return xx assign;
 }
 
-Ast_Statement *parse_directive_statement(Parser *p)
-{
-    Token token = eat_token_type(p, TOKEN_IDENT, "Expected an identifier because we parsed an alphabetic character after '#'.");
-        
-    if (sv_eq(token.string_value, sv_from_cstr("import_system_library"))) {
-        Source_Location loc = token.location;
-
-        token = eat_token_type(p, TOKEN_STRING, "Expected a string constant with the library path after #import_system_library.");
-
-        Ast_Import *import = ast_alloc(p, loc, AST_IMPORT, sizeof(*import)); 
-        import->path_name = token.string_value;
-        import->is_system_library = true;
-        return xx import;
-    }
-        
-    if (sv_eq(token.string_value, sv_from_cstr("load"))) {
-        token = eat_token_type(p, TOKEN_STRING, "Expected a string constant with the library path after #import_system_library.");
-
-        void workspace_add_file(Workspace *w, const char *path_as_cstr);
-
-        const char *path_as_cstr = arena_sv_to_cstr(&temporary_arena, token.string_value);
-        workspace_add_file(p->workspace, path_as_cstr);
-        eat_token_type(p, ';', "Expected semicolon after load directive.");
-
-        return NULL;
-    }
-
-    parser_report_error(p, token.location, "Unknown directive '"SV_Fmt"'.", SV_Arg(token.string_value));
-    return NULL;
-}
-
 Ast_Statement *parse_statement(Parser *p)
 {
     Token token = peek_next_token(p);
@@ -1134,16 +1100,21 @@ Ast_Statement *parse_statement(Parser *p)
         return xx using;
     }
 
-    case '#': {
+    case TOKEN_DIRECTIVE_LOAD: {
         eat_next_token(p);
+        token = eat_token_type(p, TOKEN_STRING, "Expected a string literal with the file path after #load.");
 
-        if (isalpha(peek_character(p))) {
-            return parse_directive_statement(p);
-        }
+        void workspace_add_file(Workspace *w, const char *path_as_cstr);
 
-        parser_report_error(p, token.location, "Expected a statement but got '#'.");
-        parser_report_error(p, token.location, "... if this is meant to be a directive then an identifier must be directly after the hash.");
+        const char *path_as_cstr = arena_sv_to_cstr(&temporary_arena, token.string_value);
+        workspace_add_file(p->workspace, path_as_cstr);
+        eat_token_type(p, ';', "Expected semicolon after #load directive.");
+
         return NULL;
+    }
+
+    case TOKEN_DIRECTIVE_IMPORT: {
+        UNIMPLEMENTED;
     }
 
     case '{':
@@ -1202,6 +1173,20 @@ void parse_declaration_value(Parser *p, Ast_Declaration *decl)
 
     if (token.type == ':') {
         decl->flags |= DECLARATION_IS_CONSTANT;
+
+        if (peek_next_token(p).type == TOKEN_DIRECTIVE_SYSTEM_LIBRARY) {
+            token = eat_next_token(p);
+            Source_Location loc = token.location;
+            token = eat_token_type(p, TOKEN_STRING, "Expected a string literal with the library path after #system_library.");
+           
+            Ast_Import *import = ast_alloc(p, loc, AST_IMPORT, sizeof(*import)); 
+            import->path_name = token.string_value;
+            import->is_system_library = true;
+
+            decl->my_import = import;
+            return;
+        }
+        
         decl->root_expression = parse_expression(p);
 
         if (decl->root_expression->kind == AST_LAMBDA) {

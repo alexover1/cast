@@ -69,6 +69,7 @@ void workspace_execute_llvm(Workspace *w);
 void workspace_dispose_llvm(Workspace *w);
 
 LLVMValueRef llvm_get_named_value(LLVMValueRef function, const char *name);
+LLVMTypeRef llvm_get_packed_struct_type(Workspace *w, const Ast_Type_Definition *defn);
 LLVMTypeRef llvm_get_type(Workspace *w, const Ast_Type_Definition *type_def);
 LLVMOpcode llvm_get_opcode(int operator_type, Ast_Type_Definition *defn, LLVMIntPredicate *int_predicate, LLVMRealPredicate *real_predicate);
 LLVMValueRef llvm_const_string(Llvm llvm, const char *data, size_t count);

@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include <llvm-c/Core.h>
+#include <dynload.h>
 
 #include "common.h"
 #include "token.h"
@@ -173,7 +174,8 @@ struct Ast_Lambda {
 
     Ast_Type_Definition *type_definition;
     Ast_Declaration *my_body_declaration;
-    bool is_foreign;
+
+    Ast_Ident *foreign_library_name; // If this is non-null, we are a foreign procedure.
 
     // String_View name;
     // Ast_Block *block; // block->parent == arguments_block
@@ -358,6 +360,7 @@ typedef struct {
 
     String_View path_name;
     bool is_system_library;
+    DLLib *library_data;
 } Ast_Import;
 
 enum {
@@ -393,6 +396,7 @@ struct Ast_Declaration {
     int struct_field_index; // If a struct member.
 
     Ast_Block *my_block; // If this declaration owns a block.
+    Ast_Import *my_import; // If this declaration is an import.
 
     Ast_Node *flattened;
     size_t typechecking_position;

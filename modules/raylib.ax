@@ -1,5 +1,7 @@
 // raylib v4.5 - A simple and easy-to-use library to enjoy videogames programming (www.raylib.com)
 
+RL :: #system_library "libraylib.so";
+
 RL_LIGHTGRAY  :: RL_Color.{ 200, 200, 200, 255 };
 RL_GRAY       :: RL_Color.{ 130, 130, 130, 255 };
 RL_DARKGRAY   :: RL_Color.{ 80, 80, 80, 255 };
@@ -103,102 +105,76 @@ RL_RenderTexture :: struct {
 RL_RenderTexture2D :: RL_RenderTexture;
 
 // Window-related functions
-InitWindow :: (width: s32, height: s32, title: *u8) #foreign;
-WindowShouldClose :: () -> bool #foreign;
-CloseWindow :: () -> void #foreign;
-IsWindowReady :: () -> bool #foreign;
-IsWindowFullscreen :: () -> bool #foreign;
-IsWindowHidden :: () -> bool #foreign;
-IsWindowMinimized :: () -> bool #foreign;
-IsWindowMaximized :: () -> bool #foreign;
-IsWindowFocused :: () -> bool #foreign;
-IsWindowResized :: () -> bool #foreign;
-IsWindowState :: (flag: u32) -> bool #foreign;
-SetWindowState :: (flags: u32) #foreign;
-ClearWindowState :: (flags: u32) #foreign;
-ToggleFullscreen :: () -> void #foreign;
-MaximizeWindow :: () -> void #foreign;
-MinimizeWindow :: () -> void #foreign;
-RestoreWindow :: () -> void #foreign;
-SetWindowIcon :: (image: RL_Image) #foreign;
-SetWindowIcons :: (images: *RL_Image, count: s32) #foreign;
-SetWindowTitle :: (title: *u8) #foreign;
-SetWindowPosition :: (x: s32, y: s32) #foreign;
-SetWindowMonitor :: (monitor: s32) #foreign;
-SetWindowMinSize :: (width: s32, height: s32) #foreign;
-SetWindowSize :: (width: s32, height: s32) #foreign;
-SetWindowOpacity :: (opacity: float) #foreign;
-GetWindowHandle :: () -> *void #foreign;
-GetScreenWidth :: () -> s32 #foreign;
-GetScreenHeight :: () -> s32 #foreign;
-GetRenderWidth :: () -> s32 #foreign;
-GetRenderHeight :: () -> s32 #foreign;
-GetMonitorCount :: () -> s32 #foreign;
-GetCurrentMonitor :: () -> s32 #foreign;
-GetMonitorPosition :: (monitor: s32) -> RL_Vector2 #foreign;
-GetMonitorWidth :: (monitor: s32) -> s32 #foreign;
-GetMonitorHeight :: (monitor: s32) -> s32 #foreign;
-GetMonitorPhysicalWidth :: (monitor: s32) -> s32 #foreign;
-GetMonitorPhysicalHeight :: (monitor: s32) -> s32 #foreign;
-GetMonitorRefreshRate :: (monitor: s32) -> s32 #foreign;
-GetWindowPosition :: () -> RL_Vector2 #foreign;
-GetWindowScaleDPI :: () -> RL_Vector2 #foreign;
-GetMonitorName :: (monitor: s32) -> *u8 #foreign;
-SetClipboardText :: (text: *u8) #foreign;
-GetClipboardText :: () -> *u8 #foreign;
-EnableEventWaiting :: () -> void #foreign;
-DisableEventWaiting :: () -> void #foreign;
+InitWindow :: (width: s32, height: s32, title: *u8) #foreign RL;
+WindowShouldClose :: () -> bool #foreign RL;
+CloseWindow :: () -> void #foreign RL;
+IsWindowReady :: () -> bool #foreign RL;
+IsWindowFullscreen :: () -> bool #foreign RL;
+IsWindowHidden :: () -> bool #foreign RL;
+IsWindowMinimized :: () -> bool #foreign RL;
+IsWindowMaximized :: () -> bool #foreign RL;
+IsWindowFocused :: () -> bool #foreign RL;
+IsWindowResized :: () -> bool #foreign RL;
+IsWindowState :: (flag: u32) -> bool #foreign RL;
+SetWindowState :: (flags: u32) #foreign RL;
+ClearWindowState :: (flags: u32) #foreign RL;
+ToggleFullscreen :: () -> void #foreign RL;
+MaximizeWindow :: () -> void #foreign RL;
+MinimizeWindow :: () -> void #foreign RL;
+RestoreWindow :: () -> void #foreign RL;
+SetWindowIcon :: (image: RL_Image) #foreign RL;
+SetWindowIcons :: (images: *RL_Image, count: s32) #foreign RL;
+SetWindowTitle :: (title: *u8) #foreign RL;
+SetWindowPosition :: (x: s32, y: s32) #foreign RL;
+SetWindowMonitor :: (monitor: s32) #foreign RL;
+SetWindowMinSize :: (width: s32, height: s32) #foreign RL;
+SetWindowSize :: (width: s32, height: s32) #foreign RL;
+SetWindowOpacity :: (opacity: float) #foreign RL;
+GetWindowHandle :: () -> *void #foreign RL;
+GetScreenWidth :: () -> s32 #foreign RL;
+GetScreenHeight :: () -> s32 #foreign RL;
+GetRenderWidth :: () -> s32 #foreign RL;
+GetRenderHeight :: () -> s32 #foreign RL;
+GetMonitorCount :: () -> s32 #foreign RL;
+GetCurrentMonitor :: () -> s32 #foreign RL;
+GetMonitorPosition :: (monitor: s32) -> RL_Vector2 #foreign RL;
+GetMonitorWidth :: (monitor: s32) -> s32 #foreign RL;
+GetMonitorHeight :: (monitor: s32) -> s32 #foreign RL;
+GetMonitorPhysicalWidth :: (monitor: s32) -> s32 #foreign RL;
+GetMonitorPhysicalHeight :: (monitor: s32) -> s32 #foreign RL;
+GetMonitorRefreshRate :: (monitor: s32) -> s32 #foreign RL;
+GetWindowPosition :: () -> RL_Vector2 #foreign RL;
+GetWindowScaleDPI :: () -> RL_Vector2 #foreign RL;
+GetMonitorName :: (monitor: s32) -> *u8 #foreign RL;
+SetClipboardText :: (text: *u8) #foreign RL;
+GetClipboardText :: () -> *u8 #foreign RL;
+EnableEventWaiting :: () -> void #foreign RL;
+DisableEventWaiting :: () -> void #foreign RL;
 
 // Drawing-related functions
-ClearBackground :: (color: u64) #foreign;
-BeginDrawing :: () -> void #foreign;
-EndDrawing :: () -> void #foreign;
-// BeginMode2D :: (camera: RL_Camera2D) #foreign;
-EndMode2D :: () -> void #foreign;
-// BeginMode3D :: (camera: RL_Camera3D) #foreign;
-EndMode3D :: () -> void #foreign;
-// BeginTextureMode :: (target: RL_RenderTexture2D) #foreign;
-EndTextureMode :: () -> void #foreign;
-// BeginShaderMode :: (shader: RL_Shader) #foreign;
-EndShaderMode :: () -> void #foreign;
-BeginBlendMode :: (mode: s32) #foreign;
-EndBlendMode :: () -> void #foreign;
-BeginScissorMode :: (x: s32, y: s32, width: s32, height: s32) #foreign;
-EndScissorMode :: () -> void #foreign;
-// BeginVrStereoMode :: (config: RL_VrStereoConfig) #foreign;
-EndVrStereoMode :: () -> void #foreign;
+ClearBackground :: (color: RL_Color) #foreign RL;
+BeginDrawing :: () -> void #foreign RL;
+EndDrawing :: () -> void #foreign RL;
+// BeginMode2D :: (camera: RL_Camera2D) #foreign RL;
+EndMode2D :: () -> void #foreign RL;
+// BeginMode3D :: (camera: RL_Camera3D) #foreign RL;
+EndMode3D :: () -> void #foreign RL;
+// BeginTextureMode :: (target: RL_RenderTexture2D) #foreign RL;
+EndTextureMode :: () -> void #foreign RL;
+// BeginShaderMode :: (shader: RL_Shader) #foreign RL;
+EndShaderMode :: () -> void #foreign RL;
+BeginBlendMode :: (mode: s32) #foreign RL;
+EndBlendMode :: () -> void #foreign RL;
+BeginScissorMode :: (x: s32, y: s32, width: s32, height: s32) #foreign RL;
+EndScissorMode :: () -> void #foreign RL;
+// BeginVrStereoMode :: (config: RL_VrStereoConfig) #foreign RL;
+EndVrStereoMode :: () -> void #foreign RL;
 
 // Timing-related functions
-SetTargetFPS :: (fps: s32) #foreign;
-GetFPS :: () -> s32 #foreign;
-GetFrameTime :: () -> float #foreign;
-GetTime :: () -> float64 #foreign;
+SetTargetFPS :: (fps: s32) #foreign RL;
+GetFPS :: () -> s32 #foreign RL;
+GetFrameTime :: () -> float #foreign RL;
+GetTime :: () -> float64 #foreign RL;
 
 // Basic shapes drawing functions
-DrawRectangle :: (posX: s32, posY: s32, width: s32, height: s32, color: u64) #foreign;
-
-// Interop with C functions
-color_to_u64 :: (color: RL_Color) -> u64 {
-    packed: [1] u64;
-    slice: []u64;
-    slice.data = *packed[0];
-    slice.count = packed.count;
-    pack_struct((*color) as *u8, 4, slice);
-    return packed[0];
-}
-
-pack_struct :: (input: *u8, input_size: int, output: []u64) {
-    output_index: u64 = 0;
-
-    cursor := input;
-    end := input + input_size;
-
-    while cursor < end {
-        array_index := output_index / 64;
-        bit_index := output_index % 64;
-        mask := cursor.* as u64 << bit_index;
-        output[array_index] |= mask;
-        output_index += 8;
-		cursor += 1;
-    }
-}
+DrawRectangle :: (posX: s32, posY: s32, width: s32, height: s32, color: RL_Color) #foreign RL;

@@ -1,0 +1,18 @@
+Code_Tag :: enum u16 {
+    UNINITIALIZED :: 0;
+    NUMBER :: 1;
+    STRING :: 2;
+    CONSTANT :: 3;
+}
+
+Code_Node :: struct {
+    tag: Code_Tag;
+    column: int;
+    line: int;
+    file: int;
+}
+
+main :: () {
+    node: Code_Node;
+    node.tag = .NUMBER;
+}

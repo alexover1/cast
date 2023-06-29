@@ -3,7 +3,7 @@
 
 #define WARNINGS "-Wall", "-Wextra", "-Wpedantic", "-Wfatal-errors"
 #define CFLAGS WARNINGS, "-std=c11", "-g"
-#define LIBS "-lm", "-lLLVM-15"
+#define LIBS "-lm", "-lLLVM-15", "-ldynload_s"
 
 // TODO: All files in directory "src"
 #define SOURCE "token.c", "parser.c", "workspace.c", "typecheck.c", "llvm.c"

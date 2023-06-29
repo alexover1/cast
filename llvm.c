@@ -1,9 +1,7 @@
 #include "common.h"
 #include "workspace.h"
 
-#define Replace_Type(type) do { \
-    while (type->_expression.replacement) type = xx type->_expression.replacement; \
-} while(0)
+#include <dynload.h>
 
 // For now, who cares if we zero terminate? I don't see any problems. And it lets you call c functions easier.
 #define DONT_ZERO_TERMINATE 0
@@ -86,6 +84,16 @@ void workspace_setup_llvm(Workspace *w)
 
 void workspace_execute_llvm(Workspace *w)
 {
+    // Link all dynamic libraries to LLVM.
+    For (w->declarations) {
+        Ast_Declaration *decl = w->declarations[it];
+        if (decl->my_import) {
+            const char *library_path = arena_sv_to_cstr(&temporary_arena, decl->my_import->path_name);
+            decl->my_import->library_data = dlLoadLibrary(library_path);
+            printf("Info: Sucessfully loaded library %p\n", (void*) decl->my_import->library_data);
+        }
+    }
+    
     Ast_Declaration *main_decl = find_declaration_in_block(w->global_block, sv_from_cstr("main"));
     if (!main_decl) {
         fprintf(stderr, "Error: Cannot run a program with no 'main' entry point.");
@@ -142,6 +150,13 @@ void workspace_dispose_llvm(Workspace *w)
     }
     
     LLVMContextDispose(w->llvm.context); // @Bad: Why is this not consistently named?
+}
+
+LLVMTypeRef llvm_get_packed_struct_type(Workspace *w, const Ast_Type_Definition *defn)
+{
+    assert(defn->size >= 0);
+    const int num_words = (defn->size + 7) / 8;
+    return LLVMArrayType(LLVMInt64TypeInContext(w->llvm.context), num_words);
 }
 
 LLVMTypeRef llvm_get_type(Workspace *w, const Ast_Type_Definition *defn)
@@ -207,18 +222,11 @@ LLVMTypeRef llvm_get_type(Workspace *w, const Ast_Type_Definition *defn)
         size_t arg_count = arrlenu(defn->lambda.argument_types);
         LLVMTypeRef *param_types = arena_alloc(&temporary_arena, sizeof(LLVMTypeRef) * arg_count);
         For (defn->lambda.argument_types) {
-            // Replace_Type(defn->lambda.argument_types[it]);
-            // if (defn->lambda.argument_types[it]->kind == TYPE_DEF_STRUCT) {
-            //     assert(defn->size >= 0);
-            //     const int num_i64s = (defn->size + 7) / 8;
-
-            //     param_types[it] = LLVMArrayType(LLVMInt64TypeInContext(llvm.context), num_i64s);
-                   
-            //     // We need to pass it by pointer but with the byval attribute.
-            //     // param_types[it] = LLVMPointerTypeInContext(llvm.context, 0);
-            // } else {
+            if (defn->lambda.argument_types[it]->kind == TYPE_DEF_STRUCT) {
+                param_types[it] = llvm_get_packed_struct_type(w, defn);
+            } else {
                 param_types[it] = llvm_get_type(w, defn->lambda.argument_types[it]);
-            // }
+            }
         }
         LLVMTypeRef return_type = llvm_get_type(w, defn->lambda.return_type);
         return LLVMFunctionType(return_type, param_types, arg_count, defn->lambda.variadic);
@@ -617,7 +625,21 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
         LLVMValueRef *args = arena_alloc(&temporary_arena, sizeof(LLVMValueRef) * args_count);
 
         For (call->arguments) {
-            args[it] = llvm_build_expression(w, call->arguments[it]);
+            if (call->arguments[it]->inferred_type->kind == TYPE_DEF_STRUCT) {
+                if (call->arguments[it]->kind == AST_TYPE_INSTANTIATION) {
+                    report_info(w, call->arguments[it]->location, "Here is the struct type instantiation.");
+                    // We are constant.
+                    assert(0);
+                }
+                    
+                args[it] = LLVMBuildLoad2(
+                    llvm.builder,
+                    llvm_get_packed_struct_type(w, call->arguments[it]->inferred_type),
+                    llvm_build_pointer(w, call->arguments[it]),
+                    "");
+            } else {
+                args[it] = llvm_build_expression(w, call->arguments[it]);
+            }
         }
 
         return LLVMBuildCall2(llvm.builder, procedure_type, procedure, args, args_count, "");

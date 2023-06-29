@@ -68,6 +68,15 @@ static inline void parse_maybe_equals_token(Parser *parser, Token *token, Token_
     }
 }
 
+static Token_Type parse_directive_or_error(String_View s)
+{
+    if (sv_eq(s, SV("load"))) return TOKEN_DIRECTIVE_LOAD;
+    if (sv_eq(s, SV("import"))) return TOKEN_DIRECTIVE_IMPORT;
+    if (sv_eq(s, SV("system_library"))) return TOKEN_DIRECTIVE_SYSTEM_LIBRARY;
+    if (sv_eq(s, SV("foreign"))) return TOKEN_DIRECTIVE_FOREIGN;
+    return TOKEN_ERROR;
+}
+
 static Token_Type parse_keyword_or_ident_token_type(String_View s)
 {
     switch (s.count) {
@@ -309,7 +318,17 @@ Token find_next_token(Parser *parser)
     case ':':
     case ';':
     case '~':
+        break;
     case '#':
+        if (isalpha(peek_character(parser))) {
+            String_View literal = sv_chop_left_while(&parser->current_line, continues_identifier);
+            token.location.c1 = parser_current_character_index(parser);
+            token.type = parse_directive_or_error(literal);
+            if (token.type == TOKEN_ERROR) {
+                parser_report_error(parser, token.location, "Unknown directive '"SV_Fmt"'.", SV_Arg(literal));
+            }
+            return token;
+        }
         break;
     default:
         token.type = TOKEN_ERROR;
@@ -483,6 +502,12 @@ const char *token_type_to_string(int type)
     case TOKEN_KEYWORD_TRUE: return "true";
     case TOKEN_KEYWORD_FALSE: return "false";
     case TOKEN_KEYWORD_UNION: return "union";
+    case TOKEN_KEYWORD_AS: return "as";
+
+    case TOKEN_DIRECTIVE_LOAD: return "#load";
+    case TOKEN_DIRECTIVE_IMPORT: return "#import";
+    case TOKEN_DIRECTIVE_SYSTEM_LIBRARY: return "#system_library";
+    case TOKEN_DIRECTIVE_FOREIGN: return "#foreign";
 
     case TOKEN_NOTE: return "note";
     case TOKEN_END_OF_INPUT: return "end of input";
