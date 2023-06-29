@@ -6,6 +6,9 @@ main :: () -> int {
 
     bg := color_to_u64(RL_DARKBLUE);
     fg := color_to_u64(RL_LIME);
+
+    // v := GetMonitorPosition(GetCurrentMonitor());
+    // printf("%d, %d\n", v.x, v.y);
     
     while !WindowShouldClose() {
         BeginDrawing();

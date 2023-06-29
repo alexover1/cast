@@ -1,5 +1,7 @@
 main
 out
+nobuild
+nobuild.old
 *.llvm
 *.asm
 *.o
