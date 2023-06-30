@@ -78,7 +78,6 @@ LLVMValueRef llvm_pack_struct_into_i64_array(LLVMBuilderRef builder, LLVMValueRe
 LLVMValueRef llvm_build_pointer(Workspace *w, Ast_Expression *expr);
 LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr);
 void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *stmt);
-void llvm_build_declaration(Workspace *w, Ast_Declaration *decl);
 
 // Random helper functions:
 

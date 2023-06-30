@@ -94,21 +94,22 @@ void workspace_execute_llvm(Workspace *w)
         }
     }
     
+    // TODO: make sure main is constant.
     Ast_Declaration *main_decl = find_declaration_in_block(w->global_block, sv_from_cstr("main"));
     if (!main_decl) {
         fprintf(stderr, "Error: Cannot run a program with no 'main' entry point.");
         workspace_dispose_llvm(w);
         exit(1);
     }
-    if (main_decl->root_expression->kind != AST_LAMBDA) {
+    if (main_decl->root_expression->kind != AST_PROCEDURE) {
         report_error(w, main_decl->location, "'main' must be a procedure.");
         workspace_dispose_llvm(w);
         exit(1);
     }
 
-    Ast_Lambda *lambda = xx main_decl->root_expression;
+    Ast_Procedure *proc = xx main_decl->root_expression;
 
-    if (arrlen(lambda->type_definition->lambda.argument_types) != 0) {
+    if (arrlen(proc->lambda_type->lambda.argument_types) != 0) {
         report_error(w, main_decl->location, "'main' entry point must not take any arguments.");
     }
 
@@ -136,7 +137,7 @@ void workspace_execute_llvm(Workspace *w)
     }
 
     // Execute the function
-    LLVMRunFunction(w->llvm.execution_engine, lambda->my_body_declaration->llvm_value, 0, NULL);
+    LLVMRunFunction(w->llvm.execution_engine, main_decl->llvm_value, 0, NULL);
 }
 
 void workspace_dispose_llvm(Workspace *w)
@@ -539,6 +540,10 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
         const Ast_Ident *ident = xx expr;
         assert(ident->resolved_declaration);
 
+        if (ident->resolved_declaration->flags & DECLARATION_IS_PROCEDURE) {
+            return ident->resolved_declaration->llvm_value;
+        }
+
         assert(!(ident->resolved_declaration->flags & DECLARATION_IS_CONSTANT)); // It should have been substituted.
 
         // Because during typechecking we assured that the variable's initialization came before us, this is safe.
@@ -608,9 +613,9 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
             
         return LLVMBuildBinOp(llvm.builder, opcode, LHS, RHS, "");
     }
-    case AST_LAMBDA: {
-        const Ast_Lambda *lambda = xx expr;
-        LLVMValueRef procedure = lambda->my_body_declaration->llvm_value;
+    case AST_PROCEDURE: {
+        const Ast_Procedure *proc = xx expr;
+        LLVMValueRef procedure = proc->llvm_value;
         assert(procedure); // These get created in a pre-pass.
         return procedure;
     }
@@ -861,40 +866,5 @@ void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *st
     default:
         printf("%s\n", stmt_to_string(stmt));
         assert(0);
-    }
-}
-
-
-void llvm_build_declaration(Workspace *w, Ast_Declaration *decl)
-{
-    if (decl->flags & DECLARATION_IS_PROCEDURE_HEADER) {
-        Ast_Lambda *lambda = xx decl->root_expression;
-        LLVMSetValueName2(lambda->my_body_declaration->llvm_value, decl->ident->name.data, decl->ident->name.count);
-    }
-
-    if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) {
-        if (decl->flags & DECLARATION_IS_FOREIGN) return; // Nothing to build.
-
-        assert(decl->llvm_value); // Should've been added in the pre-pass.
-        LLVMValueRef function = decl->llvm_value;
-        LLVMBasicBlockRef entry = LLVMAppendBasicBlock(function, "entry");
-        LLVMPositionBuilderAtEnd(w->llvm.builder, entry);
-        llvm_build_statement(w, function, xx decl->my_block->parent); // Arguments.
-        llvm_build_statement(w, function, xx decl->my_block);
-
-        if (decl->my_type->lambda.return_type == w->type_def_void) {
-            if (LLVMGetBasicBlockTerminator(LLVMGetLastBasicBlock(function)) == NULL) {
-                LLVMBuildRetVoid(w->llvm.builder);
-            }
-        }
-
-        if (LLVMVerifyFunction(function, LLVMPrintMessageAction)) {
-            String_View name;
-            name.data = LLVMGetValueName2(function, &name.count);
-            printf("===============================\n");
-            LLVMDumpValue(function);
-            printf("===============================\n");
-            exit(1);
-        }
     }
 }

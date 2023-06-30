@@ -38,7 +38,6 @@ typedef struct Ast_Node Ast_Node;
 typedef struct Workspace Workspace;
 
 typedef struct Ast_Block Ast_Block;
-typedef struct Ast_Lambda Ast_Lambda;
 typedef struct Ast_Struct Ast_Struct;
 typedef struct Ast_Enum Ast_Enum;
 typedef struct Ast_Type_Definition Ast_Type_Definition;
@@ -50,7 +49,7 @@ typedef enum {
     AST_IDENT = 3,
     AST_UNARY_OPERATOR = 4,
     AST_BINARY_OPERATOR = 5,
-    AST_LAMBDA = 6,
+    AST_PROCEDURE = 6,
     AST_PROCEDURE_CALL = 7,
     AST_TYPE_DEFINITION = 8,
     AST_CAST = 9,
@@ -168,8 +167,19 @@ typedef struct {
     Ast_Expression *right;
 } Ast_Binary_Operator;
 
+typedef struct {
+    Ast_Expression _expression;
+
+    Ast_Type_Definition *lambda_type;
+    Ast_Block *body_block; // This will be NULL if we are foreign.
+    
+    Ast_Ident *foreign_library_name;
+
+    LLVMValueRef llvm_value;
+} Ast_Procedure;
+
 /// `(x: int) -> int { return x * x; }`
-struct Ast_Lambda {
+struct Ast_Lambda_ {
     Ast_Expression _expression;
 
     Ast_Type_Definition *type_definition;
@@ -312,7 +322,7 @@ typedef struct {
     Ast_Statement _statement;
 
     Ast_Expression *subexpression;
-    Ast_Lambda *lambda_i_belong_to;
+    Ast_Procedure *proc_i_belong_to;
 } Ast_Return;
 
 typedef struct {
@@ -366,14 +376,13 @@ typedef struct {
 
 enum {
     DECLARATION_IS_CONSTANT = 0x1,
-    DECLARATION_IS_PROCEDURE_HEADER = 0x2,
-    DECLARATION_IS_PROCEDURE_BODY = 0x4,
+    DECLARATION_IS_PROCEDURE = 0x2,
+    DECLARATION_IS_FOR_LOOP_ITERATOR = 0x4,
     DECLARATION_IS_STRUCT_FIELD = 0x8,
     DECLARATION_IS_ENUM_VALUE = 0x10,
     DECLARATION_IS_LAMBDA_ARGUMENT = 0x20,
     DECLARATION_IS_POLYMORPHIC = 0x40,
-    DECLARATION_IS_FOR_LOOP_ITERATOR = 0x800,
-    DECLARATION_IS_GLOBAL_VARIABLE = 0x1000,
+    DECLARATION_IS_GLOBAL_VARIABLE = 0x800,
     // These are set during typechecking.
     DECLARATION_TYPE_WAS_INFERRED_FROM_EXPRESSION = 0x80,
     DECLARATION_VALUE_WAS_INFERRED_FROM_TYPE = 0x100, // Default value (zero) was added.
@@ -397,7 +406,7 @@ struct Ast_Declaration {
 
     int struct_field_index; // If a struct member.
 
-    Ast_Block *my_block; // If this declaration owns a block.
+    Ast_Block *my_block; // If this declaration owns a block. TODO: @nocheckin remove.
     Ast_Import *my_import; // If this declaration is an import.
 
     Ast_Node *flattened;
@@ -434,7 +443,7 @@ typedef struct {
 
     Workspace *workspace;
     Ast_Block *current_block;
-    Ast_Lambda *current_lambda;
+    Ast_Procedure *current_procedure;
     Ast_Statement *current_loop; // Points at either Ast_While or Ast_For.
     size_t serial;
 } Parser;
@@ -474,7 +483,7 @@ Ast_Expression *parse_expression(Parser *p);
 
 Ast_Type_Definition *parse_lambda_type(Parser *p);
 Ast_Declaration *parse_lambda_argument(Parser *p, unsigned index);
-Ast_Lambda *parse_lambda_definition(Parser *p, Ast_Type_Definition *lambda_type);
+Ast_Procedure *parse_procedure(Parser *p, Ast_Type_Definition *lambda_type);
 
 Ast_Type_Definition *parse_struct_desc(Parser *p);
 Ast_Type_Definition *parse_enum_defn(Parser *p);

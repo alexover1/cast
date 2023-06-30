@@ -7,8 +7,7 @@ puts :: (s: *u8) -> int #foreign libc;
 putchar :: (c: s32) -> int #foreign libc;
 exit :: (status: s32) #foreign libc;
 
-print_integer :: (x_: s32) {
-    x := x_;
+print_integer :: (x: s32) {
     if x > 9 {
         a := x / 10;
         x -= a * 10;

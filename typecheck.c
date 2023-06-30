@@ -78,7 +78,7 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
 #if 0
     String_Builder sb = {0};
     sb_append_cstr(&sb, ">>> ");
-    print_decl_to_builder(&sb, decl);
+    print_decl_to_builder(&sb, decl, 0);
     sb_append_cstr(&sb, "\n");
     printf(SV_Fmt, SV_Arg(sb));
 #endif
@@ -89,17 +89,20 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
     
     // We are done typechecking our members.
 
-    if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) {
-        Ast_Lambda *lambda = xx decl->root_expression;
-        if (lambda->foreign_library_name) {
-            assert(lambda->foreign_library_name->resolved_declaration);
-            if (!lambda->foreign_library_name->resolved_declaration->my_import) {
-                report_info(w, lambda->foreign_library_name->resolved_declaration->location, "Here is the declaration.");
-                report_error(w, lambda->foreign_library_name->_expression.location, "Expected a library but got %s.",
-                    type_to_string(lambda->foreign_library_name->resolved_declaration->my_type));
+    if (decl->root_expression && decl->root_expression->kind == AST_PROCEDURE) {
+        Ast_Procedure *proc = xx decl->root_expression;
+        // TODO: I think proc->foreign_library_name could possibly get substituted.
+        if (proc->foreign_library_name) {
+            assert(proc->foreign_library_name->resolved_declaration);
+            if (!proc->foreign_library_name->resolved_declaration->my_import) {
+                report_info(w, proc->foreign_library_name->resolved_declaration->location, "Here is the declaration.");
+                report_error(w, proc->foreign_library_name->_expression.location, "Expected a library but got %s.",
+                    type_to_string(proc->foreign_library_name->resolved_declaration->my_type));
             }
         }
-        goto done;
+        decl->my_type = proc->lambda_type;
+        decl->flags |= DECLARATION_HAS_BEEN_TYPECHECKED;
+        return;
     }
 
     if (decl->my_import) goto done;
@@ -403,6 +406,18 @@ void typecheck_identifier(Workspace *w, Ast_Ident **ident)
     if (decl->my_import) {
         // We don't want to substitute ourselves.
         (*ident)->_expression.inferred_type = w->type_def_int; // @Junk.
+        return;
+    }
+
+    // We don't need to wait for it to compile!
+    if (decl->flags & DECLARATION_IS_PROCEDURE) {
+        // TODO: we might need to wait for its type though...
+
+        Ast_Procedure *proc = xx decl->root_expression;
+        (*ident)->_expression.inferred_type = proc->lambda_type;
+        
+        // @nocheckin is this correct? do we substitute even though we aren't done yet?
+        // Substitute(ident, decl->root_expression);
         return;
     }
 
@@ -840,10 +855,10 @@ void typecheck_binary_operator(Workspace *w, Ast_Binary_Operator **binary)
     }
 }
 
-void typecheck_lambda(Workspace *w, Ast_Lambda *lambda)
+void typecheck_procedure(Workspace *w, Ast_Procedure *proc)
 {
     TRACE();
-    lambda->_expression.inferred_type = lambda->type_definition;
+    proc->_expression.inferred_type = proc->lambda_type;
     UNUSED(w);
     // UNUSED(lambda);
     // UNIMPLEMENTED;
@@ -1298,15 +1313,15 @@ void typecheck_expression(Workspace *w, Ast_Expression **expr)
 {
     // if ((*expr)->inferred_type) return; // TODO: replace this with an assert and see if this ever happens.
     switch ((*expr)->kind) {
-    case AST_NUMBER:             typecheck_number(w, xx *expr, NULL);    break;
-    case AST_LITERAL:            typecheck_literal(w, xx *expr);         break;
+    case AST_NUMBER:             typecheck_number(w, xx *expr, NULL);   break;
+    case AST_LITERAL:            typecheck_literal(w, xx *expr);        break;
     case AST_IDENT:              typecheck_identifier(w, xx expr);      break;
     case AST_UNARY_OPERATOR:     typecheck_unary_operator(w, xx expr);  break;
     case AST_BINARY_OPERATOR:    typecheck_binary_operator(w, xx expr); break;
-    case AST_LAMBDA:             typecheck_lambda(w, xx *expr);          break;
-    case AST_PROCEDURE_CALL:     typecheck_procedure_call(w, xx *expr);  break;
+    case AST_PROCEDURE:          typecheck_procedure(w, xx *expr);      break;
+    case AST_PROCEDURE_CALL:     typecheck_procedure_call(w, xx *expr); break;
     case AST_TYPE_DEFINITION:    typecheck_definition(w, xx expr);      break;
-    case AST_CAST:               typecheck_cast(w, xx *expr);            break;
+    case AST_CAST:               typecheck_cast(w, xx *expr);           break;
     case AST_SELECTOR:           typecheck_selector(w, xx expr);        break;
     case AST_TYPE_INSTANTIATION: typecheck_instantiation(w, xx expr);   break;
     }
@@ -1355,7 +1370,7 @@ void typecheck_return(Workspace *w, Ast_Return *ret)
 {
     UNUSED(w);
 
-    Ast_Type_Definition *expected_type = ret->lambda_i_belong_to->type_definition->lambda.return_type;
+    Ast_Type_Definition *expected_type = ret->proc_i_belong_to->lambda_type->lambda.return_type;
 
     if (!check_that_types_match(w, &ret->subexpression, expected_type)) {
         report_error(w, ret->subexpression->location, "Return type mismatch: Wanted %s but got %s.",
@@ -1447,11 +1462,14 @@ void flatten_expr_for_typechecking(Ast_Declaration *root, Ast_Expression **expr)
         flatten_expr_for_typechecking(root, &(*binary)->right);
         break;
     }
-    case AST_LAMBDA: {
-        Ast_Lambda **lambda = xx expr;
-        flatten_expr_for_typechecking(root, xx &(*lambda)->type_definition);
-        // Notice how we don't do anything about lambda->my_body_declaration.
-        // It will get async processing on its own.
+    case AST_PROCEDURE: {
+        Ast_Procedure **proc = xx expr;
+        flatten_expr_for_typechecking(root, xx &(*proc)->lambda_type);
+        if ((*proc)->body_block) {
+            flatten_stmt_for_typechecking(root, xx (*proc)->body_block->parent); // Arguments.
+            flatten_stmt_for_typechecking(root, xx (*proc)->body_block);
+        }
+        if ((*proc)->foreign_library_name) flatten_expr_for_typechecking(root, xx &(*proc)->foreign_library_name);
         break;
     }
     case AST_PROCEDURE_CALL: {
@@ -1586,19 +1604,6 @@ void flatten_stmt_for_typechecking(Ast_Declaration *root, Ast_Statement *stmt)
 
 void flatten_decl_for_typechecking(Ast_Declaration *decl)
 {
-    if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) {
-        Ast_Lambda *lambda = xx decl->root_expression;
-
-        if (lambda->foreign_library_name) {
-            flatten_expr_for_typechecking(decl, xx &lambda->foreign_library_name); // @Volatile: This would not work if we try to substitute the identifier.
-            return;
-        }
-         
-        flatten_stmt_for_typechecking(decl, xx decl->my_block->parent); // Arguments.
-        flatten_stmt_for_typechecking(decl, xx decl->my_block);
-        return;
-    }
-
     if (decl->my_type) {
         flatten_expr_for_typechecking(decl, xx &decl->my_type);
     }

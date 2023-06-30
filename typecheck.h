@@ -72,7 +72,7 @@ void typecheck_literal(Workspace *w, Ast_Literal *literal);
 void typecheck_identifier(Workspace *w, Ast_Ident **ident);
 void typecheck_unary_operator(Workspace *w, Ast_Unary_Operator **unary);
 void typecheck_binary_operator(Workspace *w, Ast_Binary_Operator **binary);
-void typecheck_lambda(Workspace *w, Ast_Lambda *lambda);
+void typecheck_procedure(Workspace *w, Ast_Procedure *procedure);
 void typecheck_procedure_call(Workspace *w, Ast_Procedure_Call *call);
 void typecheck_definition(Workspace *w, Ast_Type_Definition **type);
 void typecheck_instantiation(Workspace *w, Ast_Type_Instantiation **inst);

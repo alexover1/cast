@@ -164,15 +164,23 @@ void workspace_typecheck(Workspace *w)
 
 void workspace_llvm(Workspace *w)
 {
-    // Add all function declarations in a pre-pass.
+    // Predeclare all globals (functions and variables). TODO: We should have a "Module" system and then we call llvm_build_module which handles this.
     For (w->declarations) {
         Ast_Declaration *decl = w->declarations[it];
 
-        if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) {
-            LLVMTypeRef type = llvm_get_type(w, decl->my_type); assert(type);
-            LLVMValueRef function = LLVMAddFunction(w->llvm.module, "", type);
-            LLVMSetFunctionCallConv(function, LLVMCCallConv);           
+        if (decl->flags & DECLARATION_IS_PROCEDURE) {
+            Ast_Procedure *proc = xx decl->root_expression;
+
+            LLVMTypeRef function_type = llvm_get_type(w, proc->lambda_type);
+            assert(function_type);
+
+            const char *name = arena_sv_to_cstr(context_arena, decl->ident->name);
+            LLVMValueRef function = LLVMAddFunction(w->llvm.module, name, function_type);
+            LLVMSetFunctionCallConv(function, LLVMCCallConv); // Not sure if we need this, but...
+
+            proc->llvm_value = function;
             decl->llvm_value = function;
+            continue;
         }
 
         if (decl->flags & DECLARATION_IS_GLOBAL_VARIABLE) {
@@ -193,9 +201,34 @@ void workspace_llvm(Workspace *w)
     For (w->declarations) {
         Ast_Declaration *decl = w->declarations[it];
 
-        if (!(decl->flags & DECLARATION_IS_CONSTANT)) continue;
+        if (decl->flags & DECLARATION_IS_PROCEDURE) {           
+            Ast_Procedure *proc = xx decl->root_expression;
 
-        llvm_build_declaration(w, decl);
+            if (!proc->body_block) continue; // Has no body (most likely #foreign or a bug).
+
+            LLVMValueRef function = proc->llvm_value;
+            assert(function); // Should've been added in the pre-pass.
+
+            LLVMBasicBlockRef entry = LLVMAppendBasicBlock(function, "entry");
+            LLVMPositionBuilderAtEnd(w->llvm.builder, entry);
+            llvm_build_statement(w, function, xx proc->body_block->parent); // Arguments.
+            llvm_build_statement(w, function, xx proc->body_block);
+
+            // TODO: typechecker doesn't detect missing returns of non-void functions.
+
+            if (proc->lambda_type->lambda.return_type == w->type_def_void) {
+                if (LLVMGetBasicBlockTerminator(LLVMGetLastBasicBlock(function)) == NULL) {
+                    LLVMBuildRetVoid(w->llvm.builder);
+                }
+            }
+
+            if (LLVMVerifyFunction(function, LLVMPrintMessageAction)) {
+                printf("===============================\n");
+                LLVMDumpValue(function);
+                printf("===============================\n");
+                exit(1);
+            }
+        }
     }
 }
 

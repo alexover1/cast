@@ -131,13 +131,15 @@ static bool expression_requires_semicolon(Ast_Expression *expr)
             return true;
         }
     }
-    if (expr->kind == AST_LAMBDA) return false;
+    if (expr->kind == AST_PROCEDURE) {
+        Ast_Procedure *proc = xx expr;
+        return proc->foreign_library_name != NULL;
+    }
     return true;
 }
 
 static bool declaration_requires_semicolon(Ast_Declaration *decl)
 {
-    if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) return false;
     if (decl->root_expression) return expression_requires_semicolon(decl->root_expression);
     // Not sure when this can happen...
     return true;
@@ -413,7 +415,7 @@ Ast_Expression *parse_base_expression(Parser *p)
         {
             Ast_Type_Definition *lambda_type = parse_lambda_type(p);
             token = peek_next_token(p);
-            if (token.type == '{' || token.type == TOKEN_DIRECTIVE_FOREIGN) return xx parse_lambda_definition(p, lambda_type);
+            if (token.type == '{' || token.type == TOKEN_DIRECTIVE_FOREIGN) return xx parse_procedure(p, lambda_type);
             return xx lambda_type;
         }
         }
@@ -436,7 +438,7 @@ Ast_Expression *parse_base_expression(Parser *p)
     return NULL;
 }
 
-Ast_Lambda *parse_lambda_definition(Parser *p, Ast_Type_Definition *lambda_type)
+Ast_Procedure *parse_procedure(Parser *p, Ast_Type_Definition *lambda_type)
 {
     if (!lambda_type) lambda_type = parse_lambda_type(p);
 
@@ -447,37 +449,29 @@ Ast_Lambda *parse_lambda_definition(Parser *p, Ast_Type_Definition *lambda_type)
         if (p->reported_error) return NULL;
 
         // TODO: parse an identifier with which library the declaration is from.
-        Ast_Lambda *lambda = ast_alloc(p, lambda_type->_expression.location, AST_LAMBDA, sizeof(*lambda));
-        lambda->type_definition = lambda_type;
-        lambda->my_body_declaration = make_declaration(p, lambda_type->_expression.location);
-        lambda->my_body_declaration->root_expression = xx lambda;
-        lambda->my_body_declaration->flags = DECLARATION_IS_CONSTANT | DECLARATION_IS_PROCEDURE_BODY | DECLARATION_IS_FOREIGN;
-        lambda->my_body_declaration->my_type = lambda_type;
-        lambda->foreign_library_name = make_identifier(p, token);
+        Ast_Procedure *proc = ast_alloc(p, lambda_type->_expression.location, AST_PROCEDURE, sizeof(*proc));
+        proc->lambda_type = lambda_type;
+        proc->foreign_library_name = make_identifier(p, token);
         Exit_Block(p, lambda_type->lambda.arguments_block);
-        return lambda;
+        return proc;
     }
 
     Token token = eat_token_type(p, '{', "Expected opening curly brace after lambda type.");
 
-    Ast_Lambda *lambda = ast_alloc(p, token.location, AST_LAMBDA, sizeof(*lambda));
-    lambda->type_definition = lambda_type;
-    lambda->my_body_declaration = make_declaration(p, token.location);
-    lambda->my_body_declaration->flags = DECLARATION_IS_CONSTANT | DECLARATION_IS_PROCEDURE_BODY;
-    lambda->my_body_declaration->my_type = lambda_type;
-    lambda->my_body_declaration->root_expression = xx lambda;
-    lambda->my_body_declaration->my_block = ast_alloc(p, token.location, AST_BLOCK, sizeof(Ast_Block));
-    lambda->my_body_declaration->my_block->belongs_to = BLOCK_BELONGS_TO_LAMBDA;
-    lambda->my_body_declaration->my_block->belongs_to_data = lambda;
+    Ast_Procedure *proc = ast_alloc(p, token.location, AST_PROCEDURE, sizeof(*proc));
+    proc->lambda_type = lambda_type;
+    proc->body_block = ast_alloc(p, token.location, AST_BLOCK, sizeof(Ast_Block));
+    proc->body_block->belongs_to = BLOCK_BELONGS_TO_LAMBDA;
+    proc->body_block->belongs_to_data = proc;
 
-    Ast_Lambda *previous_lambda = p->current_lambda;
+    Ast_Procedure *previous = p->current_procedure;
 
-    p->current_lambda = lambda;
-    parse_into_block(p, lambda->my_body_declaration->my_block);
+    p->current_procedure = proc;
+    parse_into_block(p, proc->body_block);
     Exit_Block(p, lambda_type->lambda.arguments_block);
-    p->current_lambda = previous_lambda;
+    p->current_procedure= previous;
 
-    return lambda;
+    return proc;
 }
 
 Ast_Declaration *parse_lambda_argument(Parser *p, unsigned index)
@@ -778,8 +772,8 @@ Ast_Type_Definition *parse_type_definition(Parser *parser, Ast_Expression *type_
             parser_report_error(parser, type_expression->location, "Here we expected a type, but we got a binary operation.");
         case AST_CAST:
             parser_report_error(parser, type_expression->location, "Here we expected a type, but we got a cast.");
-        case AST_LAMBDA:
-            parser_report_error(parser, type_expression->location, "Here we expected a type, but we got a lambda.");
+        case AST_PROCEDURE:
+            parser_report_error(parser, type_expression->location, "Here we expected a type, but we got a procedure.");
         case AST_TYPE_INSTANTIATION:
             parser_report_error(parser, type_expression->location, "Here we expected a type, but we got an initializer argument list.");
 
@@ -1061,12 +1055,12 @@ Ast_Statement *parse_statement(Parser *p)
     case TOKEN_KEYWORD_RETURN: {
         eat_next_token(p);        
 
-        if (!p->current_lambda) {
+        if (!p->current_procedure) {
             parser_report_error(p, token.location, "Cannot use 'return' outside of a procedure.");
         }
         Ast_Return *ret = ast_alloc(p, token.location, AST_RETURN, sizeof(*ret));
         ret->subexpression = parse_expression(p);
-        ret->lambda_i_belong_to = p->current_lambda;
+        ret->proc_i_belong_to = p->current_procedure;
         return xx ret;
     }
 
@@ -1190,8 +1184,9 @@ void parse_declaration_value(Parser *p, Ast_Declaration *decl)
         
         decl->root_expression = parse_expression(p);
 
-        if (decl->root_expression->kind == AST_LAMBDA) {
-            decl->flags |= DECLARATION_IS_PROCEDURE_HEADER;
+        // If we are a procedure definition.
+        if (decl->root_expression->kind == AST_PROCEDURE) {
+            decl->flags |= DECLARATION_IS_PROCEDURE;
         }
 
         // If we have a block, we need to set it on the declaration.
@@ -1523,12 +1518,15 @@ void print_expr_to_builder(String_Builder *sb, const Ast_Expression *expr, size_
         print_expr_to_builder(sb, binary->right, depth);
         break;
     }
-    case AST_LAMBDA: {
-        // const Ast_Lambda *lambda = xx expr;
-        sb_append_cstr(sb, "<lambda>");
-        // print_type_to_builder(sb, lambda->type_definition);
-        // sb_append_cstr(sb, " ");
-        // print_stmt_to_builder(sb, xx lambda->my_body_declaration->my_block, depth);
+    case AST_PROCEDURE: {
+        const Ast_Procedure *proc = xx expr;
+        print_type_to_builder(sb, proc->lambda_type);
+        sb_append_cstr(sb, " ");
+        if (proc->body_block) print_stmt_to_builder(sb, xx proc->body_block, depth);
+        if (proc->foreign_library_name) {
+            sb_append_cstr(sb, "#foreign ");
+            sb_append(sb, proc->foreign_library_name->name.data, proc->foreign_library_name->name.count);
+        }
         break;
     }
     case AST_PROCEDURE_CALL: {
@@ -1724,26 +1722,6 @@ void print_stmt_to_builder(String_Builder *sb, const Ast_Statement *stmt, size_t
 
 void print_decl_to_builder(String_Builder *sb, const Ast_Declaration *decl, size_t depth)
 {
-    if (decl->flags & DECLARATION_IS_PROCEDURE_HEADER) {
-        Ast_Lambda *lambda = xx decl->root_expression; // TODO: handle overload_set
-        if (decl->ident) sb_append(sb, decl->ident->name.data, decl->ident->name.count);
-        else sb_append_cstr(sb, "<unnamed>");
-        sb_append_cstr(sb, " : ");
-        print_type_to_builder(sb, lambda->type_definition);
-        return;
-    }
-    
-    if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) {
-        if (decl->flags & DECLARATION_IS_FOREIGN) {
-            sb_append_cstr(sb, "#foreign");
-            return;
-        }
-        
-        sb_append_cstr(sb, "<lambda body> ");
-        print_stmt_to_builder(sb, xx decl->my_block, depth);
-        return;
-    }
-
     if (decl->ident) sb_append(sb, decl->ident->name.data, decl->ident->name.count);
     else sb_append_cstr(sb, "<unnamed>");
 
