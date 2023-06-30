@@ -324,6 +324,7 @@ Ast_Expression *parse_primary_expression(Parser *p, Ast_Expression *base)
             Ast_Cast *cast = ast_alloc(p, token.location, AST_CAST, sizeof(*cast));
             cast->type = parse_type_definition(p, NULL);
             cast->subexpression = base;
+            cast->value_cast = true;
 
             base = xx cast;
             break;
@@ -1210,6 +1211,10 @@ void parse_declaration_value(Parser *p, Ast_Declaration *decl)
     if (token.type == '=') {
         // We parse the expression and create a type instantiation in the current block.
         Ast_Expression *initializer = parse_expression(p);
+
+        if (p->current_block == p->workspace->global_block) {
+            decl->flags |= DECLARATION_IS_GLOBAL_VARIABLE;
+        }
         
         if (p->current_block->belongs_to == BLOCK_BELONGS_TO_STRUCT) {
             // This means we are a struct field.

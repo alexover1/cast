@@ -1,0 +1,51 @@
+Player :: struct {
+    // TODO: using rect.
+    rect: RL_Rectangle; // Current position and size.
+    velocity: RL_Vector2;
+    color: RL_Color;
+}
+
+player := Player.{
+    RL_Rectangle.{0., 0., 100., 100.},
+    RL_Vector2.{100., 100.},
+    RL_LIME
+};
+
+update :: () {
+    dt :: 1./60.;
+
+    width := GetRenderWidth() as float;
+    height := GetRenderHeight() as float;
+
+    if player.rect.x < 0. || player.rect.x + player.rect.width > width {
+        player.velocity.x *= -1.;
+    }
+    
+    if player.rect.y < 0. || player.rect.y + player.rect.height > height {
+        player.velocity.y *= -1.;
+    }
+    
+    player.rect.x += player.velocity.x * dt;
+    player.rect.y += player.velocity.y * dt;
+}
+
+render :: () {
+    DrawRectangleRec(player.rect, RL_LIME);
+}
+
+main :: () -> int {
+    InitWindow(800, 600, "My Simple Game");
+    SetTargetFPS(60);
+
+    while !WindowShouldClose() {
+        BeginDrawing();
+        ClearBackground(RL_DARKBLUE);
+        update();
+        render();
+        EndDrawing();
+    }
+    return 0;
+}
+
+#load "modules/raylib.ax";
+#load "modules/libc.ax";

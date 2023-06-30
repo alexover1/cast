@@ -257,6 +257,7 @@ typedef struct {
 
     Ast_Type_Definition *type;
     Ast_Expression *subexpression;
+    bool value_cast; // Try and retain the same value or panic.
 } Ast_Cast;
 
 typedef struct {
@@ -372,6 +373,7 @@ enum {
     DECLARATION_IS_LAMBDA_ARGUMENT = 0x20,
     DECLARATION_IS_POLYMORPHIC = 0x40,
     DECLARATION_IS_FOR_LOOP_ITERATOR = 0x800,
+    DECLARATION_IS_GLOBAL_VARIABLE = 0x1000,
     // These are set during typechecking.
     DECLARATION_TYPE_WAS_INFERRED_FROM_EXPRESSION = 0x80,
     DECLARATION_VALUE_WAS_INFERRED_FROM_TYPE = 0x100, // Default value (zero) was added.

@@ -5,7 +5,7 @@
 
 // For now, who cares if we zero terminate? I don't see any problems. And it lets you call c functions easier.
 #define DONT_ZERO_TERMINATE 0
-#define USE_STRUCT_PACKING 0
+#define USE_STRUCT_PACKING 1
 
 void workspace_setup_llvm(Workspace *w)
 {
@@ -152,10 +152,11 @@ void workspace_dispose_llvm(Workspace *w)
     LLVMContextDispose(w->llvm.context); // @Bad: Why is this not consistently named?
 }
 
-LLVMTypeRef llvm_get_packed_struct_type(Workspace *w, const Ast_Type_Definition *defn)
+LLVMTypeRef llvm_get_packed_struct_type(Workspace *w, LLVMTypeRef struct_type)
 {
-    assert(defn->size >= 0);
-    const int num_words = (defn->size + 7) / 8;
+    LLVMTargetDataRef target_data = LLVMGetModuleDataLayout(w->llvm.module);
+    const size_t struct_size = LLVMABISizeOfType(target_data, struct_type);
+    const size_t num_words = (struct_size + 7) / 8;
     return LLVMArrayType(LLVMInt64TypeInContext(w->llvm.context), num_words);
 }
 
@@ -222,10 +223,10 @@ LLVMTypeRef llvm_get_type(Workspace *w, const Ast_Type_Definition *defn)
         size_t arg_count = arrlenu(defn->lambda.argument_types);
         LLVMTypeRef *param_types = arena_alloc(&temporary_arena, sizeof(LLVMTypeRef) * arg_count);
         For (defn->lambda.argument_types) {
+            param_types[it] = llvm_get_type(w, defn->lambda.argument_types[it]);
+
             if (defn->lambda.argument_types[it]->kind == TYPE_DEF_STRUCT) {
-                param_types[it] = llvm_get_packed_struct_type(w, defn);
-            } else {
-                param_types[it] = llvm_get_type(w, defn->lambda.argument_types[it]);
+                param_types[it] = llvm_get_packed_struct_type(w, param_types[it]);
             }
         }
         LLVMTypeRef return_type = llvm_get_type(w, defn->lambda.return_type);
@@ -441,62 +442,59 @@ LLVMValueRef llvm_build_pointer(Workspace *w, Ast_Expression *expr)
     return llvm_build_expression(w, expr);
 }
 
-// Accepts a pointer to a struct and packs it into an allocated i64 array.
-LLVMValueRef llvm_pack_struct_into_i64_array(LLVMBuilderRef builder, LLVMValueRef function, LLVMTargetDataRef target_data, LLVMValueRef struct_value)
+#define IS_FLOAT(type) ((type)->number.flags & NUMBER_FLAGS_FLOAT)
+#define IS_SIGNED(type) ((type)->number.flags & NUMBER_FLAGS_SIGNED)
+
+LLVMOpcode llvm_get_float_cast_opcode(Workspace *w, Ast_Type_Definition *from, Ast_Type_Definition *to)
 {
-    LLVMBasicBlockRef entry_block = LLVMGetLastBasicBlock(function);
+    UNUSED(w);
     
-    LLVMTypeRef struct_type = LLVMTypeOf(struct_value);
-    size_t struct_size = LLVMABISizeOfType(target_data, struct_type);
-    size_t num_i64s = (struct_size + 7) / 8;
+    bool from_is_float = IS_FLOAT(from);
+    bool to_is_float = IS_FLOAT(to);
 
-    // Allocate memory for the array of i64s.
-    LLVMValueRef packed_array = LLVMBuildArrayAlloca(builder, LLVMInt64Type(), LLVMConstInt(LLVMInt32Type(), num_i64s, 0), "packed_array");
+    if (from_is_float && to_is_float) {
+        if (to->size > from->size) return LLVMFPExt;
+        if (to->size < from->size) return LLVMFPTrunc;
+        return LLVMBitCast; // Unreachable?
+    }
 
-    // Cast the input struct pointer into a byte pointer.
-    LLVMTypeRef byte_ptr_type = LLVMPointerType(LLVMInt8Type(), 0);
-    LLVMValueRef byte_ptr = LLVMBuildBitCast(builder, struct_value, byte_ptr_type, "byte_ptr");
+    // Casting to float.
+    if (to_is_float) {
+        return IS_SIGNED(from) ? LLVMSIToFP : LLVMUIToFP;
+    }
+        
+    // Casting from float.
+    assert(from_is_float);
+    return IS_SIGNED(from) ? LLVMFPToSI : LLVMFPToUI;
+}
 
-    // Create the loop.
-    LLVMBasicBlockRef loop_block = LLVMAppendBasicBlock(function, "pack_loop");
-    LLVMBasicBlockRef end_block = LLVMAppendBasicBlock(function, "pack_end");
-    LLVMBuildBr(builder, loop_block); // Enter the loop.
-    LLVMPositionBuilderAtEnd(builder, loop_block);
+LLVMOpcode llvm_get_cast_opcode(Workspace *w, Ast_Type_Definition *from, Ast_Type_Definition *to)
+{
+    assert(from->kind == to->kind);
 
-    LLVMValueRef offset_phi = LLVMBuildPhi(builder, LLVMInt64Type(), "offset_phi");
-    LLVMValueRef byte_ptr_phi = LLVMBuildPhi(builder, byte_ptr_type, "byte_ptr_phi");
-    LLVMValueRef packed_array_phi = LLVMBuildPhi(builder, LLVMPointerType(LLVMInt64Type(), 0), "packed_array_phi");
+    switch (from->kind) {
+    case TYPE_DEF_NUMBER: {
+        if (IS_FLOAT(from) || IS_FLOAT(to)) {
+            return llvm_get_float_cast_opcode(w, from, to);
+        }
 
-    // Load a byte from the struct and OR it with the current value in the packed array.
-    LLVMValueRef byte = LLVMBuildLoad2(builder, LLVMInt8Type(), byte_ptr_phi, "byte");
-    // LLVMValueRef index = LLVMBuildUDiv(builder, offset_phi, LLVMConstInt(LLVMInt64Type(), 8, 0), "index");
-    LLVMValueRef current = LLVMBuildLoad2(builder, LLVMInt64Type(), packed_array_phi, "current");
-    LLVMValueRef shift = LLVMBuildShl(builder, LLVMBuildZExt(builder, byte, LLVMInt64Type(), "zext"), offset_phi, "shift");
-    LLVMValueRef packed_value = LLVMBuildOr(builder, current, shift, "packed_value");
-    LLVMBuildStore(builder, packed_value, packed_array_phi);
+        // Signed and unsigned downcasts.
+        if (to->size < from->size) {
+            return LLVMTrunc;
+        }
 
-    // Increment the byte pointer and offset.
-    LLVMValueRef indices = LLVMConstInt(LLVMInt32Type(), 1, 0);
-    LLVMValueRef byte_ptr_inc = LLVMBuildGEP2(builder, LLVMInt8Type(), byte_ptr_phi, &indices, 1, "byte_ptr_inc");
-    LLVMValueRef offset_inc = LLVMBuildAdd(builder, offset_phi, LLVMConstInt(LLVMInt64Type(), 8, 0), "offset_inc");
+        if (IS_SIGNED(to) == IS_SIGNED(from)) {
+            if (to->size > from->size) {
+                return IS_SIGNED(to) ? LLVMSExt : LLVMZExt;
+            }
+            return LLVMBitCast; // TODO: When does this happen?
+        }
 
-    // Check if we are done.
-    LLVMValueRef offset_cmp = LLVMBuildICmp(builder, LLVMIntEQ, offset_inc, LLVMConstInt(LLVMInt64Type(), struct_size, 0), "offset_cmp");
-    LLVMBuildCondBr(builder, offset_cmp, end_block, loop_block);
-
-    // Add the loop variables to the phi nodes.
-    LLVMAddIncoming(offset_phi, &offset_inc, &loop_block, 1);
-    LLVMAddIncoming(byte_ptr_phi, &byte_ptr_inc, &loop_block, 1);
-    LLVMAddIncoming(packed_array_phi, &packed_array, &loop_block, 1);
-
-    LLVMValueRef offset_init = LLVMConstInt(LLVMInt64Type(), 0, 0);
-    LLVMAddIncoming(offset_phi, &offset_init, &entry_block, 1);
-    LLVMAddIncoming(byte_ptr_phi, &byte_ptr, &entry_block, 1);
-    LLVMAddIncoming(packed_array_phi, &packed_array, &entry_block, 1);
-
-    LLVMPositionBuilderAtEnd(builder, end_block);
-
-    return packed_array;
+        assert(0);
+    }
+    default:
+        return LLVMBitCast;
+    }
 }
 
 LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
@@ -625,20 +623,27 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
         LLVMValueRef *args = arena_alloc(&temporary_arena, sizeof(LLVMValueRef) * args_count);
 
         For (call->arguments) {
-            if (call->arguments[it]->inferred_type->kind == TYPE_DEF_STRUCT) {
-                if (call->arguments[it]->kind == AST_TYPE_INSTANTIATION) {
-                    report_info(w, call->arguments[it]->location, "Here is the struct type instantiation.");
-                    // We are constant.
-                    assert(0);
+            Ast_Expression *arg = call->arguments[it];
+
+            if (arg->inferred_type->kind == TYPE_DEF_STRUCT) {
+                if (arg->kind == AST_TYPE_INSTANTIATION) {
+                    // If we are constant, we must copy ourselves into a temporary value and then use that pointer.
+                    args[it] = LLVMBuildAlloca(llvm.builder, llvm_get_type(w, arg->inferred_type), "temp");
+                    LLVMBuildStore(llvm.builder, llvm_build_expression(w, arg), args[it]);
+                } else {
+                    args[it] = llvm_build_pointer(w, arg);
                 }
                     
                 args[it] = LLVMBuildLoad2(
                     llvm.builder,
-                    llvm_get_packed_struct_type(w, call->arguments[it]->inferred_type),
-                    llvm_build_pointer(w, call->arguments[it]),
+                    llvm_get_packed_struct_type(w, llvm_get_type(w, arg->inferred_type)),
+                    args[it],
                     "");
             } else {
-                args[it] = llvm_build_expression(w, call->arguments[it]);
+                args[it] = llvm_build_expression(w, arg);
+                // if (is_printf && arg->inferred_type == w->type_def_float) {
+                //     args[it] = LLVMBuildFPExt(llvm.builder, args[it], LLVMDoubleTypeInContext(llvm.context), "");
+                // }
             }
         }
 
@@ -655,7 +660,12 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
         LLVMValueRef value = llvm_build_expression(w, cast->subexpression);
 
         LLVMOpcode opcode;
-        
+
+        if (cast->value_cast) {
+            opcode = llvm_get_cast_opcode(w, cast->subexpression->inferred_type, cast->type);
+            return LLVMBuildCast(llvm.builder, opcode, value, dest_type, "cast");
+        }
+
         if (cast->type->size > cast->subexpression->inferred_type->size) {
             // For now, we always do a zero-extending cast (this seems closest to bitcast).
             // Sign extension cast will probably be a separate instruction or a modifier on the "as" keyword.
@@ -666,7 +676,7 @@ LLVMValueRef llvm_build_expression(Workspace *w, Ast_Expression *expr)
             opcode = LLVMBitCast;
         }
         
-        return LLVMBuildCast(llvm.builder, opcode, value, dest_type, "");
+        return LLVMBuildCast(llvm.builder, opcode, value, dest_type, "bitcast");
     }
     case AST_SELECTOR: {
         const Ast_Selector *selector = xx expr;

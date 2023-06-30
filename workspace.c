@@ -127,7 +127,7 @@ void workspace_typecheck(Workspace *w)
     For (w->declarations) {
         Ast_Declaration *decl = w->declarations[it];
 
-        if (!(decl->flags & DECLARATION_IS_CONSTANT)) continue; // Only constant declarations get async processing.
+        if (!(decl->flags & DECLARATION_IS_CONSTANT) && !(decl->flags & DECLARATION_IS_GLOBAL_VARIABLE)) continue; // Only constant declarations get async processing.
 
         flatten_decl_for_typechecking(decl);
         arrput(queue, decl);
@@ -167,22 +167,25 @@ void workspace_llvm(Workspace *w)
     // Add all function declarations in a pre-pass.
     For (w->declarations) {
         Ast_Declaration *decl = w->declarations[it];
+
         if (decl->flags & DECLARATION_IS_PROCEDURE_BODY) {
             LLVMTypeRef type = llvm_get_type(w, decl->my_type); assert(type);
             LLVMValueRef function = LLVMAddFunction(w->llvm.module, "", type);
-            LLVMSetFunctionCallConv(function, LLVMCCallConv);
-
-            // For (decl->my_type->lambda.argument_types) {
-            //     if (decl->my_type->lambda.argument_types[it]->kind == TYPE_DEF_STRUCT) {
-            //         const unsigned NoUndef = 38;
-            //         const unsigned ReadOnly = 48;
-            //         const unsigned ByVal = 72;
-            //         LLVMAttributeRef attr = LLVMCreateEnumAttribute(w->llvm.context, ReadOnly, 0);
-            //         LLVMAddAttributeAtIndex(function, it+1, attr);
-            //     }
-            // }
-            
+            LLVMSetFunctionCallConv(function, LLVMCCallConv);           
             decl->llvm_value = function;
+        }
+
+        if (decl->flags & DECLARATION_IS_GLOBAL_VARIABLE) {
+            assert(!(decl->flags & DECLARATION_IS_CONSTANT));
+
+            const char *name = arena_sv_to_cstr(context_arena, decl->ident->name);
+
+            LLVMTypeRef type = llvm_get_type(w, decl->my_type); assert(type);
+            LLVMValueRef global = LLVMAddGlobal(w->llvm.module, type, name);
+            LLVMSetLinkage(global, LLVMExternalLinkage);
+            LLVMSetInitializer(global, llvm_build_expression(w, decl->root_expression));
+
+            decl->llvm_value = global;
         }
     }
     

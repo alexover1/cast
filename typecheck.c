@@ -411,7 +411,7 @@ void typecheck_identifier(Workspace *w, Ast_Ident **ident)
     // Otherwise, it's a variable, and it must be typechecked before us because we linearly typecheck procedures.
 
     if (!(decl->flags & DECLARATION_HAS_BEEN_TYPECHECKED)) {
-        if (!(decl->flags & DECLARATION_IS_CONSTANT)) {
+        if (!(decl->flags & DECLARATION_IS_CONSTANT) && !(decl->flags & DECLARATION_IS_GLOBAL_VARIABLE)) {
             report_error(w, (*ident)->_expression.location, "Cannot use variable '"SV_Fmt"' before it is defined.", SV_Arg((*ident)->name));
         }
         // Otherwise we must wait for the constant to come in.
@@ -432,34 +432,49 @@ void typecheck_identifier(Workspace *w, Ast_Ident **ident)
     (*ident)->_expression.inferred_type = decl->my_type;
 }
 
-void typecheck_unary_operator(Workspace *w, Ast_Unary_Operator *unary)
+void typecheck_unary_operator(Workspace *w, Ast_Unary_Operator **unary)
 {
     TRACE();
 
-    switch (unary->operator_type) {
-    case '*':
-        if (!expression_is_lvalue(unary->subexpression)) {
-            report_error(w, unary->_expression.location, "Can only take a pointer to an lvalue."); // TODO: This error mesage.
-        }
-        unary->_expression.inferred_type = make_pointer_type(unary->subexpression->inferred_type);
-        break;
+    switch ((*unary)->operator_type) {
     case '!': {   
-        Ast_Expression *expr = autocast_to_bool(w, unary->subexpression);
+        Ast_Expression *expr = autocast_to_bool(w, (*unary)->subexpression);
         if (expr) {
-            unary->subexpression = expr;
+            (*unary)->subexpression = expr;
         } else {
-            report_error(w, unary->subexpression->location, "Type mismatch: Wanted bool but got %s.",
-                type_to_string(unary->subexpression->inferred_type));
+            report_error(w, (*unary)->subexpression->location, "Type mismatch: Wanted bool but got %s.",
+                type_to_string((*unary)->subexpression->inferred_type));
         }
-        unary->_expression.inferred_type = w->type_def_bool;
+        (*unary)->_expression.inferred_type = w->type_def_bool;
         break;
     }
-    case TOKEN_POINTER_DEREFERENCE:
-        if (unary->subexpression->inferred_type->kind != TYPE_DEF_POINTER) {
-            report_error(w, unary->_expression.location, "Attempt to dereference a non-pointer (got type %s).",
-                type_to_string(unary->subexpression->inferred_type));
+    case '-':
+        if ((*unary)->subexpression->kind == AST_NUMBER) {
+            Ast_Number *number = xx (*unary)->subexpression;
+            if (number->flags & NUMBER_FLAGS_FLOAT) {
+                Ast_Expression *constant = xx make_float_or_float64(w, (*unary)->subexpression->location, number->as.real * -1, number->flags & NUMBER_FLAGS_FLOAT64);
+                Substitute(unary, constant);
+                return;
+            } else {
+                Ast_Expression *constant = xx make_integer(w, (*unary)->subexpression->location, (~number->as.integer) + 1, number->flags & NUMBER_FLAGS_SIGNED);
+                Substitute(unary, constant);
+                return;
+            }
         }
-        unary->_expression.inferred_type = unary->subexpression->inferred_type->pointer_to;
+        (*unary)->_expression.inferred_type = (*unary)->subexpression->inferred_type;
+        break;
+    case '*':
+        if (!expression_is_lvalue((*unary)->subexpression)) {
+            report_error(w, (*unary)->_expression.location, "Can only take a pointer to an lvalue."); // TODO: This error mesage.
+        }
+        (*unary)->_expression.inferred_type = make_pointer_type((*unary)->subexpression->inferred_type);
+        break;
+    case TOKEN_POINTER_DEREFERENCE:
+        if ((*unary)->subexpression->inferred_type->kind != TYPE_DEF_POINTER) {
+            report_error(w, (*unary)->_expression.location, "Attempt to dereference a non-pointer (got type %s).",
+                type_to_string((*unary)->subexpression->inferred_type));
+        }
+        (*unary)->_expression.inferred_type = (*unary)->subexpression->inferred_type->pointer_to;
         break;
     default:
         UNIMPLEMENTED;
@@ -958,6 +973,16 @@ void typecheck_definition(Workspace *w, Ast_Type_Definition **defn)
 void typecheck_cast(Workspace *w, Ast_Cast *cast)
 {
     TRACE();
+
+    if (types_are_equal(cast->type, cast->subexpression->inferred_type)) {
+        report_error(w, cast->_expression.location, "Cannot cast a value to it's own type.");
+    }
+
+    if (cast->value_cast && cast->type->kind != cast->subexpression->inferred_type->kind) {
+        report_error(w, cast->_expression.location, "Cannot value-cast different kinds of types (got %s and %s).",
+            type_to_string(cast->type), type_to_string(cast->subexpression->inferred_type));
+    }
+    
     UNUSED(w);
     cast->_expression.inferred_type = cast->type;
 }
@@ -1276,7 +1301,7 @@ void typecheck_expression(Workspace *w, Ast_Expression **expr)
     case AST_NUMBER:             typecheck_number(w, xx *expr, NULL);    break;
     case AST_LITERAL:            typecheck_literal(w, xx *expr);         break;
     case AST_IDENT:              typecheck_identifier(w, xx expr);      break;
-    case AST_UNARY_OPERATOR:     typecheck_unary_operator(w, xx *expr);  break;
+    case AST_UNARY_OPERATOR:     typecheck_unary_operator(w, xx expr);  break;
     case AST_BINARY_OPERATOR:    typecheck_binary_operator(w, xx expr); break;
     case AST_LAMBDA:             typecheck_lambda(w, xx *expr);          break;
     case AST_PROCEDURE_CALL:     typecheck_procedure_call(w, xx *expr);  break;

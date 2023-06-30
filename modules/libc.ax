@@ -1,6 +1,6 @@
 // libc bindings for ax.
 
-libc :: #system_library "c";
+libc :: #system_library "libc.so.6";
 
 printf :: (format: *u8, ..) #foreign libc;
 puts :: (s: *u8) -> int #foreign libc;

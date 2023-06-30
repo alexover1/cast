@@ -178,3 +178,5 @@ GetTime :: () -> float64 #foreign RL;
 
 // Basic shapes drawing functions
 DrawRectangle :: (posX: s32, posY: s32, width: s32, height: s32, color: RL_Color) #foreign RL;
+DrawRectangleV :: (position: RL_Vector2, size: RL_Vector2, color: RL_Color) #foreign RL;
+DrawRectangleRec :: (rec: RL_Rectangle, color: RL_Color) #foreign RL;

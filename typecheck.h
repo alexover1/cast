@@ -70,7 +70,7 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl);
 void typecheck_number(Workspace *w, Ast_Number *number, Ast_Type_Definition *supplied_type);
 void typecheck_literal(Workspace *w, Ast_Literal *literal);
 void typecheck_identifier(Workspace *w, Ast_Ident **ident);
-void typecheck_unary_operator(Workspace *w, Ast_Unary_Operator *unary);
+void typecheck_unary_operator(Workspace *w, Ast_Unary_Operator **unary);
 void typecheck_binary_operator(Workspace *w, Ast_Binary_Operator **binary);
 void typecheck_lambda(Workspace *w, Ast_Lambda *lambda);
 void typecheck_procedure_call(Workspace *w, Ast_Procedure_Call *call);

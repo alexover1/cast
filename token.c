@@ -93,6 +93,7 @@ static Token_Type parse_keyword_or_ident_token_type(String_View s)
         if (sv_eq2(s, SV("null"))) return TOKEN_KEYWORD_NULL;
         if (sv_eq2(s, SV("enum"))) return TOKEN_KEYWORD_ENUM;
         if (sv_eq2(s, SV("true"))) return TOKEN_KEYWORD_TRUE;
+        if (sv_eq2(s, SV("cast"))) return TOKEN_KEYWORD_CAST;
         break;
     case 5:
         if (sv_eq2(s, SV("while"))) return TOKEN_KEYWORD_WHILE;
@@ -170,14 +171,35 @@ Token find_next_token(Parser *parser)
 
     int c = peek_character(parser);
 
+    // TODO: Float literals starting with '.'
     if (isdigit(c)) {
         String_View literal = sv_chop_left_while(&parser->current_line, continues_identifier);
         token.number_flags = 0;
+        token.type = TOKEN_NUMBER;
         token.location.c1 = parser_current_character_index(parser);
+
+        if (peek_character(parser) == '.') {
+            size_t n = 1;
+            for (; n < parser->current_line.count && continues_identifier(parser->current_line.data[n]); ++n) {
+                if (!isdigit(parser->current_line.data[n])) {
+                    token.location.c1 += n;
+                    parser_report_error(parser, token.location, "Illegal character in number literal.");
+                    exit(1);
+                }
+            }
+            sv_chop_left(&parser->current_line, n);
+            literal.count += n;
+            const char *cstr = arena_sv_to_cstr(&temporary_arena, literal);
+            token.double_value = strtod(cstr, NULL);
+            token.number_flags |= NUMBER_FLAGS_FLOAT;
+            token.location.c1 = parser_current_character_index(parser);
+            return token;
+        }
+        
         if (!parse_int_value(literal, 10, &token.integer_value)) {
             parser_report_error(parser, token.location, "Illegal characters in number literal.");
+            exit(1);
         }
-        token.type = TOKEN_NUMBER;
         return token;
     }
 
@@ -502,6 +524,7 @@ const char *token_type_to_string(int type)
     case TOKEN_KEYWORD_TRUE: return "true";
     case TOKEN_KEYWORD_FALSE: return "false";
     case TOKEN_KEYWORD_UNION: return "union";
+    case TOKEN_KEYWORD_CAST: return "cast";
     case TOKEN_KEYWORD_AS: return "as";
 
     case TOKEN_DIRECTIVE_LOAD: return "#load";
