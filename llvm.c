@@ -94,20 +94,19 @@ void workspace_execute_llvm(Workspace *w)
         }
     }
     
-    // TODO: make sure main is constant.
     Ast_Declaration *main_decl = find_declaration_in_block(w->global_block, sv_from_cstr("main"));
     if (!main_decl) {
         fprintf(stderr, "Error: Cannot run a program with no 'main' entry point.");
         workspace_dispose_llvm(w);
         exit(1);
     }
-    if (main_decl->root_expression->kind != AST_PROCEDURE) {
-        report_error(w, main_decl->location, "'main' must be a procedure.");
+    if (!(main_decl->flags & DECLARATION_IS_PROCEDURE)) {
+        report_error(w, main_decl->location, "'main' must be a constant procedure.");
         workspace_dispose_llvm(w);
         exit(1);
     }
 
-    Ast_Procedure *proc = xx main_decl->root_expression;
+    Ast_Procedure *proc = xx main_decl->my_value;
 
     if (arrlen(proc->lambda_type->lambda.argument_types) != 0) {
         report_error(w, main_decl->location, "'main' entry point must not take any arguments.");
@@ -847,7 +846,7 @@ void llvm_build_statement(Workspace *w, LLVMValueRef function, Ast_Statement *st
             break;
         }
 
-        LLVMValueRef initializer = llvm_build_expression(w, var->declaration->root_expression);
+        LLVMValueRef initializer = llvm_build_expression(w, var->declaration->my_value);
         LLVMBuildStore(llvm.builder, initializer, alloca);
         break;
     }

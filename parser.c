@@ -140,7 +140,7 @@ static bool expression_requires_semicolon(Ast_Expression *expr)
 
 static bool declaration_requires_semicolon(Ast_Declaration *decl)
 {
-    if (decl->root_expression) return expression_requires_semicolon(decl->root_expression);
+    if (decl->my_value) return expression_requires_semicolon(decl->my_value);
     // Not sure when this can happen...
     return true;
 }
@@ -598,7 +598,7 @@ Ast_Type_Definition *parse_enum_defn(Parser *p)
         Ast_Declaration *member = make_declaration(p, token.location);
         member->ident = make_identifier(p, token);
         member->my_type = defn; // The type of the declaration is the enum type.
-        member->root_expression = value;
+        member->my_value = value;
         member->flags = DECLARATION_IS_CONSTANT | DECLARATION_IS_ENUM_VALUE;
         arrput(enum_defn->block->declarations, member);
 
@@ -924,7 +924,7 @@ Ast_Statement *parse_for_statement(Parser *p)
     zero->as.integer = 0;
     zero->_expression.inferred_type = p->workspace->type_def_int;
     for_stmt->iterator_declaration->my_type = p->workspace->type_def_int;
-    for_stmt->iterator_declaration->root_expression = xx zero;
+    for_stmt->iterator_declaration->my_value = xx zero;
 
     if (peek_next_token(p).type == TOKEN_IDENT && peek_token(p, 1).type == ':') {
         token = eat_next_token(p);
@@ -1182,16 +1182,16 @@ void parse_declaration_value(Parser *p, Ast_Declaration *decl)
             return;
         }
         
-        decl->root_expression = parse_expression(p);
+        decl->my_value = parse_expression(p);
 
         // If we are a procedure definition.
-        if (decl->root_expression->kind == AST_PROCEDURE) {
+        if (decl->my_value->kind == AST_PROCEDURE) {
             decl->flags |= DECLARATION_IS_PROCEDURE;
         }
 
         // If we have a block, we need to set it on the declaration.
-        if (decl->root_expression->kind == AST_TYPE_DEFINITION) {
-            Ast_Type_Definition *defn = xx decl->root_expression;
+        if (decl->my_value->kind == AST_TYPE_DEFINITION) {
+            Ast_Type_Definition *defn = xx decl->my_value;
             switch (defn->kind) {
             case TYPE_DEF_STRUCT: decl->my_block = defn->struct_desc->block; break;
             case TYPE_DEF_ENUM:   decl->my_block = defn->enum_defn->block; break;
@@ -1219,7 +1219,7 @@ void parse_declaration_value(Parser *p, Ast_Declaration *decl)
             struct_desc->field_count += 1;
         }
 
-        decl->root_expression = initializer;
+        decl->my_value = initializer;
         return;
     }
 
@@ -1731,10 +1731,10 @@ void print_decl_to_builder(String_Builder *sb, const Ast_Declaration *decl, size
         sb_append_cstr(sb, type_to_string(decl->my_type));
         sb_append_cstr(sb, " ");
     }
-    if (decl->root_expression) {
+    if (decl->my_value) {
         if (decl->flags & DECLARATION_IS_CONSTANT) sb_append_cstr(sb, ": ");
         else sb_append_cstr(sb, "= ");
-        print_expr_to_builder(sb, decl->root_expression, depth);
+        print_expr_to_builder(sb, decl->my_value, depth);
     }
 }
 

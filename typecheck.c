@@ -89,8 +89,8 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
     
     // We are done typechecking our members.
 
-    if (decl->root_expression && decl->root_expression->kind == AST_PROCEDURE) {
-        Ast_Procedure *proc = xx decl->root_expression;
+    if (decl->flags & DECLARATION_IS_PROCEDURE) {
+        Ast_Procedure *proc = xx decl->my_value;
         // TODO: I think proc->foreign_library_name could possibly get substituted.
         if (proc->foreign_library_name) {
             assert(proc->foreign_library_name->resolved_declaration);
@@ -108,23 +108,23 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
     if (decl->my_import) goto done;
 
     if (decl->flags & DECLARATION_IS_CONSTANT) {
-        if (!decl->root_expression) {
+        if (!decl->my_value) {
             report_error(w, decl->location, "Constant declarations must have a value (this is an internal error).");
         }
     }
 
     if (!decl->my_type) {
-        if (!decl->root_expression) {
+        if (!decl->my_value) {
             report_error(w, decl->location, "We have a non-constant declaration with no type and no value (this is an internal error because this shouldn't have parsed correctly).");
         }
 
-        assert(decl->root_expression->inferred_type);
+        assert(decl->my_value->inferred_type);
 
-        if (decl->root_expression->kind == AST_NUMBER) {
-            ((Ast_Number *)decl->root_expression)->inferred_type_is_final = true;
+        if (decl->my_value->kind == AST_NUMBER) {
+            ((Ast_Number *)decl->my_value)->inferred_type_is_final = true;
         }
 
-        decl->my_type = decl->root_expression->inferred_type;
+        decl->my_type = decl->my_value->inferred_type;
         decl->flags |= DECLARATION_TYPE_WAS_INFERRED_FROM_EXPRESSION;
         goto done;
     }
@@ -135,32 +135,32 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
         report_error(w, decl->location, "Cannot have a declaration with void type.");
     }
 
-    if (!decl->root_expression) {
+    if (!decl->my_value) {
 #if 0
         printf("Default value for: %s\n", type_to_string(decl->my_type));
 #endif
         // We're definitely not a constant (this error is checked above).
         // So we just set the default value for the type.
-        decl->root_expression = generate_default_value_for_type(w, decl->my_type);
-        decl->root_expression->location = decl->location;
-        decl->root_expression->inferred_type = decl->my_type;
+        decl->my_value= generate_default_value_for_type(w, decl->my_type);
+        decl->my_value->location = decl->location;
+        decl->my_value->inferred_type = decl->my_type;
         decl->flags |= DECLARATION_VALUE_WAS_INFERRED_FROM_TYPE;
         goto done;       
     }
 
 
-    if (decl->root_expression->kind == AST_NUMBER) {
+    if (decl->my_value->kind == AST_NUMBER) {
         if (decl->flags & DECLARATION_IS_ENUM_VALUE) {
             assert(decl->my_type->kind == TYPE_DEF_ENUM); // Because it was set in parse_enum_defn().
-            typecheck_number(w, xx decl->root_expression, decl->my_type->enum_defn->underlying_int_type);
+            typecheck_number(w, xx decl->my_value, decl->my_type->enum_defn->underlying_int_type);
         } else {
-            typecheck_number(w, xx decl->root_expression, decl->my_type);
+            typecheck_number(w, xx decl->my_value, decl->my_type);
         }
     } else {
         // Check that we're not doing something like `x: bool = 12345`.
-        if (!types_are_equal(decl->my_type, decl->root_expression->inferred_type)) {
-            report_error(w, decl->root_expression->location, "Type mismatch: Wanted %s but got %s.",
-                type_to_string(decl->my_type), type_to_string(decl->root_expression->inferred_type));
+        if (!types_are_equal(decl->my_type, decl->my_value->inferred_type)) {
+            report_error(w, decl->my_value->location, "Type mismatch: Wanted %s but got %s.",
+                type_to_string(decl->my_type), type_to_string(decl->my_value->inferred_type));
         }
     }
 
@@ -183,7 +183,7 @@ Ast_Expression *generate_default_value_for_type(Workspace *w, Ast_Type_Definitio
             Ast_Declaration *field = type->struct_desc->block->declarations[it];
             if (!(field->flags & DECLARATION_IS_STRUCT_FIELD)) continue;
             assert(field->flags & DECLARATION_HAS_BEEN_TYPECHECKED);
-            arrput(inst->arguments, field->root_expression);
+            arrput(inst->arguments, field->my_value);
         }           
         return xx inst;
     }
@@ -191,7 +191,7 @@ Ast_Expression *generate_default_value_for_type(Workspace *w, Ast_Type_Definitio
         UNIMPLEMENTED;
     case TYPE_DEF_IDENT:
         assert(0);
-        return generate_default_value_for_type(w, xx type->type_name->resolved_declaration->root_expression);
+        return generate_default_value_for_type(w, xx type->type_name->resolved_declaration->my_value);
     case TYPE_DEF_STRUCT_CALL:
         UNIMPLEMENTED;
     case TYPE_DEF_POINTER:
@@ -413,11 +413,11 @@ void typecheck_identifier(Workspace *w, Ast_Ident **ident)
     if (decl->flags & DECLARATION_IS_PROCEDURE) {
         // TODO: we might need to wait for its type though...
 
-        Ast_Procedure *proc = xx decl->root_expression;
+        Ast_Procedure *proc = xx decl->my_value;
         (*ident)->_expression.inferred_type = proc->lambda_type;
         
         // @nocheckin is this correct? do we substitute even though we aren't done yet?
-        // Substitute(ident, decl->root_expression);
+        // Substitute(ident, decl->my_value);
         return;
     }
 
@@ -440,7 +440,7 @@ void typecheck_identifier(Workspace *w, Ast_Ident **ident)
     if (decl->flags & DECLARATION_IS_CONSTANT) {      
         // TODO: Because we replace the expression, the debug location information gets messed up.
         // Maybe we perform a copy here?
-        Substitute(ident, decl->root_expression);
+        Substitute(ident, decl->my_value);
         return;
     }
 
@@ -953,8 +953,8 @@ void typecheck_definition(Workspace *w, Ast_Type_Definition **defn)
                 type_to_string(decl->my_type));
         }
 
-        assert(decl->root_expression && decl->root_expression->kind == AST_TYPE_DEFINITION); // For now, because we know it's constant.
-        *defn = (Ast_Type_Definition *)decl->root_expression;
+        assert(decl->my_value && decl->my_value->kind == AST_TYPE_DEFINITION); // For now, because we know it's constant.
+        *defn = (Ast_Type_Definition *)decl->my_value;
         break;
     }
     case TYPE_DEF_STRUCT_CALL:
@@ -1078,7 +1078,7 @@ void typecheck_selector(Workspace *w, Ast_Selector **selector)
         // Otherwise, we're done.
         (*selector)->_expression.inferred_type = decl->my_type;
         if (decl->flags & DECLARATION_IS_CONSTANT) {
-            Substitute(selector, decl->root_expression);
+            Substitute(selector, decl->my_value);
         } else if (decl->flags & DECLARATION_IS_STRUCT_FIELD) {
             (*selector)->struct_field_index = decl->struct_field_index;
         }
@@ -1104,7 +1104,7 @@ void typecheck_selector(Workspace *w, Ast_Selector **selector)
             if (!(decl->flags & DECLARATION_HAS_BEEN_TYPECHECKED)) return;
 
             assert(decl->flags & DECLARATION_IS_CONSTANT);
-            Substitute(selector, decl->root_expression);
+            Substitute(selector, decl->my_value);
             return;
         }
 
@@ -1138,7 +1138,7 @@ void typecheck_selector(Workspace *w, Ast_Selector **selector)
         // @Copypasta
         (*selector)->_expression.inferred_type = decl->my_type;
         if (decl->flags & DECLARATION_IS_CONSTANT) {
-            Substitute(selector, decl->root_expression);
+            Substitute(selector, decl->my_value);
         } else if (decl->flags & DECLARATION_IS_STRUCT_FIELD) {
             (*selector)->struct_field_index = decl->struct_field_index;
         } else {
@@ -1159,7 +1159,7 @@ void typecheck_selector(Workspace *w, Ast_Selector **selector)
 
         assert(decl->flags & DECLARATION_IS_CONSTANT);
         assert(decl->flags & DECLARATION_IS_ENUM_VALUE);
-        Substitute(selector, decl->root_expression);
+        Substitute(selector, decl->my_value);
         break;
     }
     case TYPE_DEF_ARRAY: {
@@ -1535,7 +1535,7 @@ void flatten_stmt_for_typechecking(Ast_Declaration *root, Ast_Statement *stmt)
         For (block->statements) flatten_stmt_for_typechecking(root, block->statements[it]);
         For (block->declarations) {
             Ast_Declaration *decl = block->declarations[it];
-            flatten_expr_for_typechecking(root, &decl->root_expression);
+            flatten_expr_for_typechecking(root, &decl->my_value);
             if (decl->my_block) {
                 flatten_stmt_for_typechecking(root, xx decl->my_block);
             }
@@ -1584,7 +1584,7 @@ void flatten_stmt_for_typechecking(Ast_Declaration *root, Ast_Statement *stmt)
         Ast_Variable *var = xx stmt;
         // TODO: Is this right?
         flatten_expr_for_typechecking(root, xx &var->declaration->my_type);
-        flatten_expr_for_typechecking(root, &var->declaration->root_expression);
+        flatten_expr_for_typechecking(root, &var->declaration->my_value);
         break;
     }
     case AST_ASSIGNMENT: {
@@ -1608,8 +1608,8 @@ void flatten_decl_for_typechecking(Ast_Declaration *decl)
         flatten_expr_for_typechecking(decl, xx &decl->my_type);
     }
 
-    if (decl->root_expression) {
-        flatten_expr_for_typechecking(decl, &decl->root_expression);
+    if (decl->my_value) {
+        flatten_expr_for_typechecking(decl, &decl->my_value);
     }
 }
 

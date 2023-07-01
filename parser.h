@@ -399,15 +399,14 @@ struct Ast_Node {
 struct Ast_Declaration {
     Source_Location location;
     size_t serial;
-
     Ast_Ident *ident;
+
     Ast_Type_Definition *my_type;
-    Ast_Expression *root_expression;
+    Ast_Expression *my_value;
+    Ast_Block *my_block; // If this declaration owns a block.
+    Ast_Import *my_import; // If this declaration is an import.
 
     int struct_field_index; // If a struct member.
-
-    Ast_Block *my_block; // If this declaration owns a block. TODO: @nocheckin remove.
-    Ast_Import *my_import; // If this declaration is an import.
 
     Ast_Node *flattened;
     size_t typechecking_position;

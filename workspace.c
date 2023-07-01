@@ -169,7 +169,7 @@ void workspace_llvm(Workspace *w)
         Ast_Declaration *decl = w->declarations[it];
 
         if (decl->flags & DECLARATION_IS_PROCEDURE) {
-            Ast_Procedure *proc = xx decl->root_expression;
+            Ast_Procedure *proc = xx decl->my_value;
 
             LLVMTypeRef function_type = llvm_get_type(w, proc->lambda_type);
             assert(function_type);
@@ -191,7 +191,7 @@ void workspace_llvm(Workspace *w)
             LLVMTypeRef type = llvm_get_type(w, decl->my_type); assert(type);
             LLVMValueRef global = LLVMAddGlobal(w->llvm.module, type, name);
             LLVMSetLinkage(global, LLVMExternalLinkage);
-            LLVMSetInitializer(global, llvm_build_expression(w, decl->root_expression));
+            LLVMSetInitializer(global, llvm_build_expression(w, decl->my_value));
 
             decl->llvm_value = global;
         }
@@ -202,7 +202,7 @@ void workspace_llvm(Workspace *w)
         Ast_Declaration *decl = w->declarations[it];
 
         if (decl->flags & DECLARATION_IS_PROCEDURE) {           
-            Ast_Procedure *proc = xx decl->root_expression;
+            Ast_Procedure *proc = xx decl->my_value;
 
             if (!proc->body_block) continue; // Has no body (most likely #foreign or a bug).
 
