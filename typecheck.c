@@ -88,6 +88,7 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
     }
     
     // We are done typechecking our members.
+    decl->flags |= DECLARATION_HAS_BEEN_TYPECHECKED;
 
     if (decl->flags & DECLARATION_IS_PROCEDURE) {
         Ast_Procedure *proc = xx decl->my_value;
@@ -101,23 +102,25 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
             }
         }
         decl->my_type = proc->lambda_type;
-        decl->flags |= DECLARATION_HAS_BEEN_TYPECHECKED;
         return;
     }
 
-    if (decl->my_import) goto done;
+    if (decl->my_import) return;
 
-    if (decl->flags & DECLARATION_IS_CONSTANT) {
-        if (!decl->my_value) {
-            report_error(w, decl->location, "Constant declarations must have a value (this is an internal error).");
+    if (decl->my_value && decl->my_type) {
+        if (decl->flags & DECLARATION_IS_ENUM_VALUE) {
+            assert(decl->my_type->kind == TYPE_DEF_ENUM); // Because it was set in parse_enum_defn().
+            typecheck_number(w, xx decl->my_value, decl->my_type->enum_defn->underlying_int_type);
+            return;
         }
+        if (!check_that_types_match(w, &decl->my_value, decl->my_type)) {
+            report_error(w, decl->my_value->location, "Type mismatch: Wanted %s but got %s.",
+                type_to_string(decl->my_type), type_to_string(decl->my_value->inferred_type));
+        }
+        return;
     }
 
-    if (!decl->my_type) {
-        if (!decl->my_value) {
-            report_error(w, decl->location, "We have a non-constant declaration with no type and no value (this is an internal error because this shouldn't have parsed correctly).");
-        }
-
+    if (decl->my_value) {
         assert(decl->my_value->inferred_type);
 
         if (decl->my_value->kind == AST_NUMBER) {
@@ -126,46 +129,29 @@ void typecheck_declaration(Workspace *w, Ast_Declaration *decl)
 
         decl->my_type = decl->my_value->inferred_type;
         decl->flags |= DECLARATION_TYPE_WAS_INFERRED_FROM_EXPRESSION;
-        goto done;
+        return;
+    }
+
+    if (!decl->my_type) {
+        report_error(w, decl->location, "Can't have a declaration with no type or value.");
     }
 
     // So we know we have a type now.
+
+    if (decl->flags & DECLARATION_IS_CONSTANT) {
+        report_error(w, decl->location, "Constant declarations must have a value (this is an internal error).");
+    }
 
     if (decl->my_type == w->type_def_void) {
         report_error(w, decl->location, "Cannot have a declaration with void type.");
     }
 
-    if (!decl->my_value) {
-#if 0
-        printf("Default value for: %s\n", type_to_string(decl->my_type));
-#endif
-        // We're definitely not a constant (this error is checked above).
-        // So we just set the default value for the type.
-        decl->my_value= generate_default_value_for_type(w, decl->my_type);
-        decl->my_value->location = decl->location;
-        decl->my_value->inferred_type = decl->my_type;
-        decl->flags |= DECLARATION_VALUE_WAS_INFERRED_FROM_TYPE;
-        goto done;       
-    }
-
-
-    if (decl->my_value->kind == AST_NUMBER) {
-        if (decl->flags & DECLARATION_IS_ENUM_VALUE) {
-            assert(decl->my_type->kind == TYPE_DEF_ENUM); // Because it was set in parse_enum_defn().
-            typecheck_number(w, xx decl->my_value, decl->my_type->enum_defn->underlying_int_type);
-        } else {
-            typecheck_number(w, xx decl->my_value, decl->my_type);
-        }
-    } else {
-        // Check that we're not doing something like `x: bool = 12345`.
-        if (!types_are_equal(decl->my_type, decl->my_value->inferred_type)) {
-            report_error(w, decl->my_value->location, "Type mismatch: Wanted %s but got %s.",
-                type_to_string(decl->my_type), type_to_string(decl->my_value->inferred_type));
-        }
-    }
-
-done:
-    decl->flags |= DECLARATION_HAS_BEEN_TYPECHECKED;
+    // We're definitely not a constant (this error is checked above).
+    // So we just set the default value for the type.
+    decl->my_value = generate_default_value_for_type(w, decl->my_type);
+    decl->my_value->location = decl->location;
+    decl->my_value->inferred_type = decl->my_type;
+    decl->flags |= DECLARATION_VALUE_WAS_INFERRED_FROM_TYPE;
 }
 
 Ast_Expression *generate_default_value_for_type(Workspace *w, Ast_Type_Definition *type)
@@ -466,6 +452,7 @@ void typecheck_unary_operator(Workspace *w, Ast_Unary_Operator **unary)
     case '-':
         if ((*unary)->subexpression->kind == AST_NUMBER) {
             Ast_Number *number = xx (*unary)->subexpression;
+
             if (number->flags & NUMBER_FLAGS_FLOAT) {
                 Ast_Expression *constant = xx make_float_or_float64(w, (*unary)->subexpression->location, number->as.real * -1, number->flags & NUMBER_FLAGS_FLOAT64);
                 Substitute(unary, constant);
@@ -478,6 +465,28 @@ void typecheck_unary_operator(Workspace *w, Ast_Unary_Operator **unary)
         }
         (*unary)->_expression.inferred_type = (*unary)->subexpression->inferred_type;
         break;
+    case '~': {
+        Ast_Type_Definition *defn = (*unary)->subexpression->inferred_type;
+            
+        if (defn->kind != TYPE_DEF_NUMBER) {
+            report_error(w, (*unary)->_expression.location, "Type mismatch: Operator ~ does not work on non-number types (got %s).",
+                type_to_string(defn));
+        }
+
+        if (defn->number.flags & NUMBER_FLAGS_FLOAT) {
+            report_error(w, (*unary)->_expression.location, "Type mismatch: Operator ~ does not work on floating-point types (got %s).",
+                type_to_string(defn));
+        }
+
+        if ((*unary)->subexpression->kind == AST_NUMBER) {
+            Ast_Number *number = xx (*unary)->subexpression;
+            Ast_Expression *constant = xx make_integer(w, (*unary)->subexpression->location, ~number->as.integer, number->flags & NUMBER_FLAGS_SIGNED);
+            Substitute(unary, constant);
+            return;
+        }
+        (*unary)->_expression.inferred_type = defn;
+        break;
+    }
     case '*':
         if (!expression_is_lvalue((*unary)->subexpression)) {
             report_error(w, (*unary)->_expression.location, "Can only take a pointer to an lvalue."); // TODO: This error mesage.

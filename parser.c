@@ -224,6 +224,8 @@ Ast_Expression *parse_unary_expression(Parser *p)
         Ast_Unary_Operator *unary = ast_alloc(p, token.location, AST_UNARY_OPERATOR, sizeof(*unary));
         unary->operator_type = token.type;
         unary->subexpression = parse_unary_expression(p);
+        if (!unary->subexpression) return NULL;
+        unary->_expression.location = location_info_begin_end(token.location, unary->subexpression->location);
         return xx unary;
     }
     default:
@@ -241,6 +243,8 @@ Ast_Expression *parse_primary_expression(Parser *p, Ast_Expression *base)
         Token token = peek_next_token(p);
         switch (token.type) {
         case '.': {
+            // TODO: location_info_begin_end for selectors.
+
             eat_next_token(p);
 
             token = eat_next_token(p);
